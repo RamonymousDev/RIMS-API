@@ -18,6 +18,7 @@ const itemSchema = t.Object({
   variant: t.Optional(t.String({ maxLength: 100 })),
   unit: t.Optional(t.String({ minLength: 1, maxLength: 20 })),
   minStock: t.Optional(t.Integer({ min: 0 })),
+  isActive: t.Optional(t.Boolean()),
 });
 
 const patchItemSchema = t.Object({
@@ -27,6 +28,7 @@ const patchItemSchema = t.Object({
   variant: t.Optional(t.Nullable(t.String({ maxLength: 100 }))),
   unit: t.Optional(t.String({ minLength: 1, maxLength: 20 })),
   minStock: t.Optional(t.Integer({ min: 0 })),
+  isActive: t.Optional(t.Boolean()),
 });
 
 const UNIQUE_VIOLATION = "23505";
@@ -101,15 +103,19 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
       const page = Math.max(1, Number(query.page ?? "1"));
       const limit = Math.min(100, Math.max(1, Number(query.limit ?? "20")));
       const search = query.search?.trim() ?? "";
+      const active = query.active === "true" ? true : query.active === "false" ? false : undefined;
 
-      const where = search
-        ? or(
-            ilike(items.name, `%${search}%`),
-            ilike(items.sku, `%${search}%`),
-            ilike(items.model, `%${search}%`),
-            ilike(items.variant, `%${search}%`),
-          )
-        : undefined;
+      const where = and(
+        search
+          ? or(
+              ilike(items.name, `%${search}%`),
+              ilike(items.sku, `%${search}%`),
+              ilike(items.model, `%${search}%`),
+              ilike(items.variant, `%${search}%`),
+            )
+          : undefined,
+        active !== undefined ? eq(items.isActive, active) : undefined,
+      );
 
       const [totalRow] = await db
         .select({ n: count() })
@@ -127,6 +133,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
           unit: items.unit,
           minStock: items.minStock,
           stock: items.stock,
+          isActive: items.isActive,
           createdAt: items.createdAt,
           updatedAt: items.updatedAt,
         })
@@ -143,6 +150,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
         page: t.Optional(t.String()),
         limit: t.Optional(t.String()),
         search: t.Optional(t.String()),
+        active: t.Optional(t.String()),
       }),
     },
   )
@@ -171,7 +179,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
           stock: items.stock,
         })
         .from(items)
-        .where(where)
+        .where(and(where, eq(items.isActive, true)))
         .orderBy(asc(items.name))
         .limit(50);
 
@@ -373,8 +381,11 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
 
       let notaNumber: string | null = null;
       if (initialLines.length > 0) {
+        const d = new Date();
+        const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
         const res = await createTransaction({
           type: "in",
+          date: today,
           note: "Import — stok awal",
           lines: initialLines,
           idempotencyKey: importKey ? `import:${importKey}` : undefined,
@@ -428,6 +439,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
             variant: body.variant ?? null,
             unit: body.unit ?? "pcs",
             minStock: body.minStock ?? 0,
+            isActive: body.isActive ?? true,
             idempotencyKey: key ?? null,
             stock: 0,
           })

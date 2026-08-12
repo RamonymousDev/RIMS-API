@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  date,
   index,
   integer,
   jsonb,
@@ -81,6 +82,7 @@ export const items = pgTable(
     unit: text("unit").notNull().default("pcs"),
     minStock: integer("min_stock").notNull().default(0),
     stock: integer("stock").notNull().default(0),
+    isActive: boolean("is_active").notNull().default(true),
     idempotencyKey: text("idempotency_key"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -99,6 +101,7 @@ export const transactions = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     number: text("number").notNull(),
     type: transactionType("type").notNull(),
+    date: date("date").notNull().default(sql`CURRENT_DATE`),
     note: text("note"),
     partnerId: uuid("partner_id").references(() => businessPartners.id, { onDelete: "set null" }),
     idempotencyKey: text("idempotency_key"),

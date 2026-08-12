@@ -19,6 +19,7 @@ const lineSchema = t.Object({
 
 const createSchema = t.Object({
   type: t.Union([t.Literal("in"), t.Literal("out")]),
+  date: t.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" }),
   note: t.Optional(t.Nullable(t.String({ maxLength: 500 }))),
   partnerId: t.Optional(t.Nullable(t.String())),
   items: t.Array(lineSchema, { minItems: 1 }),
@@ -26,17 +27,18 @@ const createSchema = t.Object({
 
 const idParam = t.Object({ id: t.String() });
 
-function parseCursor(raw?: string): { createdAt: Date; id: string } | undefined {
+function parseCursor(raw?: string): { date: Date; createdAt: Date; id: string } | undefined {
   if (!raw) return undefined;
-  const [iso, id] = raw.split("|");
-  if (!iso || !id) return undefined;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return undefined;
-  return { createdAt: d, id };
+  const [d, iso, id] = raw.split("|");
+  if (!d || !iso || !id) return undefined;
+  const date = new Date(`${d}T00:00:00`);
+  const createdAt = new Date(iso);
+  if (Number.isNaN(date.getTime()) || Number.isNaN(createdAt.getTime())) return undefined;
+  return { date, createdAt, id };
 }
 
-function toCursor(row: { createdAt: Date; id: string }): string {
-  return `${row.createdAt.toISOString()}|${row.id}`;
+function toCursor(row: { date: string; createdAt: Date; id: string }): string {
+  return `${row.date}|${row.createdAt.toISOString()}|${row.id}`;
 }
 
 function parseDate(raw: string | undefined): Date | undefined {
@@ -96,7 +98,7 @@ export const transactionRoutes = new Elysia({ prefix: "/api/transactions" }).use
         ["Nomor", "Tanggal", "Tipe", "Kode Mitra", "Mitra", "Catatan", "Jumlah Barang", "Total Unit"],
         ...rows.map((t) => [
           t.number,
-          dateTimeCell(t.createdAt),
+          t.date,
           t.type === "in" ? "Masuk" : "Keluar",
           t.partner?.code ?? "",
           t.partner?.name ?? "",
@@ -119,7 +121,7 @@ export const transactionRoutes = new Elysia({ prefix: "/api/transactions" }).use
             l.qty,
             t.type === "in" ? "Masuk" : "Keluar",
             t.partner ? `${t.partner.code} ${t.partner.name}` : "",
-            dateTimeCell(t.createdAt),
+            t.date,
           ]),
         ),
       ];
@@ -144,6 +146,7 @@ export const transactionRoutes = new Elysia({ prefix: "/api/transactions" }).use
 
       const result = await createTransaction({
         type: body.type,
+        date: body.date,
         note: body.note ?? null,
         partnerId: body.partnerId ?? null,
         lines: body.items,

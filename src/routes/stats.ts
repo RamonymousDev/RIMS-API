@@ -4,7 +4,7 @@ import { db } from "../db/client";
 import { businessPartners, items, transactions, transactionItems } from "../db/schema";
 import { ApiError } from "../http";
 import { authGuard, requirePerm } from "../security";
-import { listTransactions } from "../transactions.service";
+import { dateToStr, listTransactions } from "../transactions.service";
 
 const STATS_CACHE_KEY = "stats:cache";
 const STATS_TTL = 15;
@@ -28,7 +28,7 @@ async function countQtySince(type: "in" | "out", since: Date) {
     })
     .from(transactions)
     .innerJoin(transactionItems, eq(transactionItems.transactionId, transactions.id))
-    .where(and(eq(transactions.type, type), gte(transactions.createdAt, since)));
+    .where(and(eq(transactions.type, type), gte(transactions.date, dateToStr(since))));
   return { count: row?.n ?? 0, qty: row?.qty ?? 0 };
 }
 
@@ -60,15 +60,15 @@ async function computeStats() {
 
   const seriesRows = await db
     .select({
-      day: sql<string>`to_char(${transactions.createdAt}, 'YYYY-MM-DD')`,
+      day: sql<string>`to_char(${transactions.date}, 'YYYY-MM-DD')`,
       type: transactions.type,
       qty: sql<number>`sum(${transactionItems.qty})::int`,
     })
     .from(transactions)
     .innerJoin(transactionItems, eq(transactionItems.transactionId, transactions.id))
-    .where(gte(transactions.createdAt, start14))
-    .groupBy(sql`to_char(${transactions.createdAt}, 'YYYY-MM-DD')`, transactions.type)
-    .orderBy(sql`to_char(${transactions.createdAt}, 'YYYY-MM-DD')`);
+    .where(gte(transactions.date, dateToStr(start14)))
+    .groupBy(sql`to_char(${transactions.date}, 'YYYY-MM-DD')`, transactions.type)
+    .orderBy(sql`to_char(${transactions.date}, 'YYYY-MM-DD')`);
 
   const series = new Map<string, { in: number; out: number }>();
   for (const row of seriesRows) {
@@ -123,7 +123,7 @@ async function computeStats() {
         .from(transactions)
         .innerJoin(businessPartners, eq(transactions.partnerId, businessPartners.id))
         .innerJoin(transactionItems, eq(transactionItems.transactionId, transactions.id))
-        .where(and(eq(transactions.type, type), gte(transactions.createdAt, start30)))
+        .where(and(eq(transactions.type, type), gte(transactions.date, dateToStr(start30))))
         .groupBy(businessPartners.id)
         .orderBy(desc(sql`count(${transactions.id})`), desc(sql`sum(${transactionItems.qty})`))
         .limit(5)

@@ -8,11 +8,24 @@ type Tx = Parameters<Parameters<PostgresJsDatabase["transaction"]>[0]>[0];
 
 export type TransactionInput = {
   type: "in" | "out";
+  date: string; // YYYY-MM-DD, wajib
   note?: string | null;
   lines: { itemId: string; qty: number }[];
   partnerId?: string | null;
   idempotencyKey?: string | null;
 };
+
+export function dateToStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+export function parseDateStrict(raw: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim());
+  if (!m) throw new ApiError(400, "Format tanggal harus YYYY-MM-DD");
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(d.getTime())) throw new ApiError(400, "Tanggal tidak valid");
+  return d;
+}
 
 const UNIQUE_VIOLATION = "23505";
 
@@ -54,11 +67,18 @@ type CreateResult =
   | { replay: false; transactionId: string; number: string };
 
 export async function createTransaction(input: TransactionInput): Promise<CreateResult> {
-  const { type, note, partnerId, idempotencyKey } = input;
+  const { type, date, note, partnerId, idempotencyKey } = input;
   const rawLines = input.lines;
 
   if (rawLines.length === 0) {
     throw new ApiError(400, "Nota harus memiliki minimal satu barang");
+  }
+
+  const parsedDate = parseDateStrict(date);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (parsedDate.getTime() > today.getTime()) {
+    throw new ApiError(400, "Tanggal tidak boleh di masa depan");
   }
 
   // partner harus cocok dengan tipe nota: in → supplier/both, out → customer/both
@@ -97,7 +117,7 @@ export async function createTransaction(input: TransactionInput): Promise<Create
     const result = await db.transaction(async (tx) => {
       // 2. kunci semua baris item, diurutkan utk hindari deadlock
       const locked = await tx
-        .select({ id: items.id, stock: items.stock })
+        .select({ id: items.id, stock: items.stock, isActive: items.isActive })
         .from(items)
         .where(inArray(items.id, itemIds))
         .orderBy(items.id)
@@ -105,6 +125,9 @@ export async function createTransaction(input: TransactionInput): Promise<Create
 
       if (locked.length !== finalLines.length) {
         throw new ApiError(400, "Ada barang yang tidak ditemukan");
+      }
+      if (locked.some((i) => !i.isActive)) {
+        throw new ApiError(400, "Salah satu barang tidak aktif");
       }
       const stockById = new Map(locked.map((i) => [i.id, i.stock]));
 
@@ -140,6 +163,7 @@ export async function createTransaction(input: TransactionInput): Promise<Create
         .values({
           number,
           type,
+          date,
           note: note ?? null,
           partnerId: partner?.id ?? null,
           idempotencyKey: idempotencyKey ?? null,
@@ -181,6 +205,7 @@ export type TransactionDetail = {
   id: string;
   number: string;
   type: "in" | "out";
+  date: string;
   note: string | null;
   partner: { id: string; code: string; name: string; type: string } | null;
   createdAt: Date;
@@ -193,6 +218,7 @@ export async function getTransactionDetail(id: string): Promise<TransactionDetai
       id: transactions.id,
       number: transactions.number,
       type: transactions.type,
+      date: transactions.date,
       note: transactions.note,
       partnerId: transactions.partnerId,
       partnerCode: businessPartners.code,
@@ -246,27 +272,33 @@ function transactionFilters(opts: TransactionListFilters) {
     conditions.push(or(ilike(transactions.number, q), ilike(transactions.note, q)));
   }
   if (opts.partnerId) conditions.push(eq(transactions.partnerId, opts.partnerId));
-  if (opts.from) conditions.push(gte(transactions.createdAt, opts.from));
+  if (opts.from) conditions.push(gte(transactions.date, dateToStr(opts.from)));
   if (opts.to) {
     const to = new Date(opts.to);
     to.setDate(to.getDate() + 1);
-    conditions.push(lt(transactions.createdAt, to));
+    conditions.push(lt(transactions.date, dateToStr(to)));
   }
   return conditions;
 }
 
 export async function listTransactions(opts: TransactionListFilters & {
-  cursor?: { createdAt: Date; id: string };
+  cursor?: { date: Date; createdAt: Date; id: string };
   limit: number;
 }) {
   const { cursor, limit } = opts;
 
   const conditions = transactionFilters(opts);
   if (cursor) {
+    const cd = dateToStr(cursor.date);
     conditions.push(
       or(
-        lt(transactions.createdAt, cursor.createdAt),
+        lt(transactions.date, cd),
         and(
+          eq(transactions.date, cd),
+          lt(transactions.createdAt, cursor.createdAt),
+        ),
+        and(
+          eq(transactions.date, cd),
           eq(transactions.createdAt, cursor.createdAt),
           lt(transactions.id, cursor.id),
         ),
@@ -279,6 +311,7 @@ export async function listTransactions(opts: TransactionListFilters & {
       id: transactions.id,
       number: transactions.number,
       type: transactions.type,
+      date: transactions.date,
       note: transactions.note,
       partnerId: transactions.partnerId,
       partnerCode: businessPartners.code,
@@ -292,13 +325,14 @@ export async function listTransactions(opts: TransactionListFilters & {
     .leftJoin(businessPartners, eq(transactions.partnerId, businessPartners.id))
     .where(conditions.length ? and(...conditions) : undefined)
     .groupBy(transactions.id, businessPartners.id)
-    .orderBy(sql`${transactions.createdAt} desc, ${transactions.id} desc`)
+    .orderBy(sql`${transactions.date} desc, ${transactions.createdAt} desc, ${transactions.id} desc`)
     .limit(limit);
 
   return rows.map((r) => ({
     id: r.id,
     number: r.number,
     type: r.type,
+    date: r.date,
     note: r.note,
     partner: r.partnerId && r.partnerCode ? { id: r.partnerId, code: r.partnerCode, name: r.partnerName ?? "" } : null,
     createdAt: r.createdAt,
@@ -310,6 +344,7 @@ export async function listTransactions(opts: TransactionListFilters & {
 export type ExportTransaction = {
   id: string;
   number: string;
+  date: string;
   createdAt: Date;
   type: "in" | "out";
   note: string | null;
@@ -331,6 +366,7 @@ export async function exportTransactions(opts: TransactionListFilters): Promise<
     .select({
       id: transactions.id,
       number: transactions.number,
+      date: transactions.date,
       createdAt: transactions.createdAt,
       type: transactions.type,
       note: transactions.note,
@@ -349,7 +385,7 @@ export async function exportTransactions(opts: TransactionListFilters): Promise<
     .leftJoin(items, eq(items.id, transactionItems.itemId))
     .leftJoin(businessPartners, eq(transactions.partnerId, businessPartners.id))
     .where(conditions.length ? and(...conditions) : undefined)
-    .orderBy(sql`${transactions.createdAt} desc, ${transactions.id} desc`);
+    .orderBy(sql`${transactions.date} desc, ${transactions.createdAt} desc, ${transactions.id} desc`);
 
   const grouped = new Map<string, ExportTransaction>();
   for (const r of rows) {
@@ -358,6 +394,7 @@ export async function exportTransactions(opts: TransactionListFilters): Promise<
       tx = {
         id: r.id,
         number: r.number,
+        date: r.date,
         createdAt: r.createdAt,
         type: r.type,
         note: r.note,

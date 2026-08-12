@@ -1,6 +1,6 @@
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { db } from "./client";
-import { businessPartners, items, transactions } from "./schema";
+import { businessPartners, items } from "./schema";
 import { createTransaction } from "../transactions.service";
 import { ensureAdminUser } from "../auth";
 
@@ -48,6 +48,10 @@ function dayOffset(offset: number): Date {
   d.setDate(d.getDate() - offset);
   d.setHours(8 + ((offset * 3) % 9), (offset * 7) % 60, 0, 0);
   return d;
+}
+
+function dateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 async function reset() {
@@ -110,6 +114,7 @@ async function seedTransactions(ids: string[], partners: { customerIds: string[]
     if (inIds.length) {
       const r = await createTransaction({
         type: "in",
+        date: dateStr(dayOffset(DAYS - offset)),
         note: `Restock — penerimaan ${DAYS - offset} hari lalu`,
         partnerId: supplierIds[(DAYS - offset) % supplierIds.length] ?? null,
         lines: inIds.map((itemId) => ({ itemId, qty: 5 + (offset % 4) })),
@@ -124,20 +129,13 @@ async function seedTransactions(ids: string[], partners: { customerIds: string[]
     if (outIds.length) {
       const r = await createTransaction({
         type: "out",
+        date: dateStr(dayOffset(DAYS - offset)),
         note: `Pengeluaran — pemakaian ${DAYS - offset} hari lalu`,
         partnerId: customerIds[(DAYS - offset) % customerIds.length] ?? null,
         lines: outIds.map((itemId) => ({ itemId, qty: 1 + (offset % 2) })),
       });
       allIds.push(r.transactionId);
     }
-  }
-
-  // sebar created_at ke 14 hari terakhir
-  for (let i = 0; i < allIds.length; i++) {
-    await db
-      .update(transactions)
-      .set({ createdAt: dayOffset(i % DAYS) })
-      .where(eq(transactions.id, allIds[i]!));
   }
 
   // pancing alert stok minim: beberapa barang dibuat di bawah min_stock (tanpa mengubah stok nyata)
