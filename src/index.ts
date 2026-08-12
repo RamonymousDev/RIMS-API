@@ -9,12 +9,14 @@ import { authRoutes } from "./routes/auth";
 import { itemRoutes } from "./routes/items";
 import { transactionRoutes } from "./routes/transactions";
 import { statsRoutes } from "./routes/stats";
+import { subscribeStatsInvalidation } from "./stats.service";
 import { feedRoutes } from "./routes/feed";
 import { partnerRoutes } from "./routes/partners";
 import { auditRoutes, userRoutes } from "./routes/users";
 
 await ensureExtensions();
 await ensureAdminUser();
+subscribeStatsInvalidation();
 
 const app = new Elysia()
   .use(

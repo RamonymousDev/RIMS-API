@@ -3,6 +3,7 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { db } from "./db/client";
 import { businessPartners, counters, items, transactionItems, transactions } from "./db/schema";
 import { ApiError } from "./http";
+import { formatBusinessDate, isFuture, parseBusinessDate } from "./dates";
 
 type Tx = Parameters<Parameters<PostgresJsDatabase["transaction"]>[0]>[0];
 
@@ -16,18 +17,6 @@ export type TransactionInput = {
   // nota sistem (mis. import stok awal) boleh menyentuh barang nonaktif
   allowInactive?: boolean;
 };
-
-export function dateToStr(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-export function parseDateStrict(raw: string): Date {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim());
-  if (!m) throw new ApiError(400, "Format tanggal harus YYYY-MM-DD");
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  if (Number.isNaN(d.getTime())) throw new ApiError(400, "Tanggal tidak valid");
-  return d;
-}
 
 const UNIQUE_VIOLATION = "23505";
 
@@ -76,10 +65,9 @@ export async function createTransaction(input: TransactionInput): Promise<Create
     throw new ApiError(400, "Nota harus memiliki minimal satu barang");
   }
 
-  const parsedDate = parseDateStrict(date);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  if (parsedDate.getTime() > today.getTime()) {
+  const parsedDate = parseBusinessDate(date);
+  if (!parsedDate) throw new ApiError(400, "Format tanggal harus YYYY-MM-DD");
+  if (isFuture(parsedDate)) {
     throw new ApiError(400, "Tanggal tidak boleh di masa depan");
   }
 
@@ -333,11 +321,11 @@ function transactionFilters(opts: TransactionListFilters) {
     conditions.push(or(ilike(transactions.number, q), ilike(transactions.note, q)));
   }
   if (opts.partnerId) conditions.push(eq(transactions.partnerId, opts.partnerId));
-  if (opts.from) conditions.push(gte(transactions.date, dateToStr(opts.from)));
+  if (opts.from) conditions.push(gte(transactions.date, formatBusinessDate(opts.from)));
   if (opts.to) {
     const to = new Date(opts.to);
     to.setDate(to.getDate() + 1);
-    conditions.push(lt(transactions.date, dateToStr(to)));
+    conditions.push(lt(transactions.date, formatBusinessDate(to)));
   }
   return conditions;
 }
@@ -350,7 +338,7 @@ export async function listTransactions(opts: TransactionListFilters & {
 
   const conditions = transactionFilters(opts);
   if (cursor) {
-    const cd = dateToStr(cursor.date);
+    const cd = formatBusinessDate(cursor.date);
     conditions.push(
       or(
         lt(transactions.date, cd),

@@ -2,7 +2,6 @@ import { Elysia, t } from "elysia";
 import { ApiError } from "../http";
 import { publishEvent } from "../redis";
 import { authGuard, requirePerm } from "../security";
-import { invalidateStatsCache } from "./stats";
 import {
   createTransaction,
   exportTransactions,
@@ -11,6 +10,8 @@ import {
   voidTransaction,
 } from "../transactions.service";
 import { xlsxAttachment } from "../xlsx";
+import { formatBusinessDate, parseBusinessDate } from "../dates";
+import { cursorLessThan, decodeCursor, encodeCursor } from "../cursor";
 import { logAudit } from "../audit";
 
 const lineSchema = t.Object({
@@ -29,27 +30,12 @@ const createSchema = t.Object({
 const idParam = t.Object({ id: t.String() });
 
 function parseCursor(raw?: string): { date: Date; createdAt: Date; id: string } | undefined {
-  if (!raw) return undefined;
-  const [d, iso, id] = raw.split("|");
-  if (!d || !iso || !id) return undefined;
-  const date = new Date(`${d}T00:00:00`);
-  const createdAt = new Date(iso);
-  if (Number.isNaN(date.getTime()) || Number.isNaN(createdAt.getTime())) return undefined;
-  return { date, createdAt, id };
-}
-
-function toCursor(row: { date: string; createdAt: Date; id: string }): string {
-  return `${row.date}|${row.createdAt.toISOString()}|${row.id}`;
-}
-
-function parseDate(raw: string | undefined): Date | undefined {
-  if (!raw) return undefined;
-  const [y, m, d] = raw.split("-").map(Number);
-  if (!y || !m || !d || y < 1970 || y > 9999 || m < 1 || m > 12 || d < 1 || d > 31) {
-    return undefined;
-  }
-  const date = new Date(y, m - 1, d);
-  return Number.isNaN(date.getTime()) ? undefined : date;
+  const parts = decodeCursor(raw);
+  if (!parts || parts.length !== 3) return undefined;
+  const date = parseBusinessDate(parts[0]!);
+  const createdAt = new Date(parts[1]!);
+  if (!date || Number.isNaN(createdAt.getTime())) return undefined;
+  return { date, createdAt, id: parts[2]! };
 }
 
 export const transactionRoutes = new Elysia({ prefix: "/api/transactions" }).use(authGuard())
@@ -61,12 +47,14 @@ export const transactionRoutes = new Elysia({ prefix: "/api/transactions" }).use
       const type = query.type === "in" || query.type === "out" ? query.type : undefined;
       const search = query.search?.trim() || undefined;
       const partnerId = query.partnerId || undefined;
-      const from = parseDate(query.from);
-      const to = parseDate(query.to);
+      const from = query.from ? (parseBusinessDate(query.from) ?? undefined) : undefined;
+      const to = query.to ? (parseBusinessDate(query.to) ?? undefined) : undefined;
       const cursor = parseCursor(query.cursor);
 
       const rows = await listTransactions({ type, search, partnerId, from, to, cursor, limit });
-      const nextCursor = rows.length === limit ? toCursor(rows[rows.length - 1]!) : null;
+      const nextCursor = rows.length === limit
+        ? encodeCursor([rows[rows.length - 1]!.date, rows[rows.length - 1]!.createdAt.toISOString(), rows[rows.length - 1]!.id])
+        : null;
 
       return { data: rows, nextCursor };
     },
@@ -89,8 +77,8 @@ export const transactionRoutes = new Elysia({ prefix: "/api/transactions" }).use
       const type = query.type === "in" || query.type === "out" ? query.type : undefined;
       const search = query.search?.trim() || undefined;
       const partnerId = query.partnerId || undefined;
-      const from = parseDate(query.from);
-      const to = parseDate(query.to);
+      const from = query.from ? (parseBusinessDate(query.from) ?? undefined) : undefined;
+      const to = query.to ? (parseBusinessDate(query.to) ?? undefined) : undefined;
 
       const rows = await exportTransactions({ type, search, partnerId, from, to });
       const date = new Date().toISOString().slice(0, 10);
@@ -161,7 +149,6 @@ export const transactionRoutes = new Elysia({ prefix: "/api/transactions" }).use
       }
 
       set.status = 201;
-      invalidateStatsCache();
       await logAudit(user, "transactions.create", "transactions", result.transactionId, {
         number: result.number,
         type: body.type,
@@ -179,7 +166,6 @@ export const transactionRoutes = new Elysia({ prefix: "/api/transactions" }).use
     async ({ params, user }) => {
       requirePerm(user, "transactions:void");
       const result = await voidTransaction(params.id);
-      invalidateStatsCache();
       await logAudit(user, "transactions.void", "transactions", params.id, {
         number: result.number,
       });

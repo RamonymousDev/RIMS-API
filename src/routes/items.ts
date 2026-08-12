@@ -1,14 +1,12 @@
 import { and, asc, count, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { Elysia, t } from "elysia";
-import * as XLSX from "xlsx";
 import { db } from "../db/client";
 import { businessPartners, items, transactionItems, transactions } from "../db/schema";
 import { ApiError } from "../http";
 import { publishEvent } from "../redis";
 import { authGuard, requirePerm } from "../security";
-import { invalidateStatsCache } from "./stats";
 import { logAudit } from "../audit";
-import { createTransaction } from "../transactions.service";
+import { applyItemImport, IMPORT_MAX_BYTES, isUniqueViolation, parseItemWorkbook } from "../import-items";
 import { xlsxAttachment } from "../xlsx";
 
 const itemSchema = t.Object({
@@ -31,94 +29,6 @@ const patchItemSchema = t.Object({
   isActive: t.Optional(t.Boolean()),
 });
 
-const UNIQUE_VIOLATION = "23505";
-
-const IMPORT_MAX_ROWS = 5000;
-const IMPORT_MAX_BYTES = 10 * 1024 * 1024;
-
-type ImportCols = {
-  sku: number;
-  name: number;
-  model: number;
-  variant: number;
-  unit: number;
-  minStock: number;
-  initialStock: number;
-  status: number;
-  tanggal: number;
-};
-
-const HEADER_ALIASES: Record<keyof ImportCols, string[]> = {
-  sku: ["sku", "kode"],
-  name: ["nama", "name", "namabarang"],
-  model: ["model"],
-  variant: ["varian", "variant"],
-  unit: ["satuan", "unit"],
-  minStock: ["stokmin", "stokminimum", "minstock"],
-  initialStock: ["stokawal", "stockawal", "initialstock"],
-  status: ["status", "aktif"],
-  tanggal: ["tanggal", "date"],
-};
-
-function normHeader(s: string): string {
-  return s.trim().toLowerCase().replace(/\s+/g, "");
-}
-
-function findCols(headerRow: unknown[]): ImportCols {
-  const map = new Map<string, number>();
-  headerRow.forEach((h, i) => {
-    const key = normHeader(String(h));
-    if (key) map.set(key, i);
-  });
-  const out = {} as ImportCols;
-  for (const key of Object.keys(HEADER_ALIASES) as (keyof ImportCols)[]) {
-    let idx = -1;
-    for (const alias of HEADER_ALIASES[key]) {
-      if (map.has(alias)) {
-        idx = map.get(alias)!;
-        break;
-      }
-    }
-    out[key] = idx;
-  }
-  return out;
-}
-
-function parseNum(v: unknown): number | null {
-  if (v === null || v === undefined || String(v).trim() === "") return null;
-  const n = Number(String(v).trim());
-  return Number.isFinite(n) ? n : null;
-}
-
-function parseStatus(v: unknown): boolean {
-  if (v === null || v === undefined || String(v).trim() === "") return true;
-  const s = String(v).trim().toLowerCase();
-  return !(s === "0" || s === "false" || s === "nonaktif" || s === "tidak" || s === "no");
-}
-
-function parseTanggal(v: unknown): string | null {
-  if (v === null || v === undefined || String(v).trim() === "") return null;
-  const s = String(v).trim();
-  // excel kadang memberi Date object
-  if (s.match(/^\d{4}-\d{2}-\d{2}$/)) return s;
-  const d = new Date(s);
-  if (Number.isNaN(d.getTime())) return null;
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function todayIso(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code: string }).code === UNIQUE_VIOLATION
-  );
-}
 
 export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
   .get(
@@ -287,184 +197,29 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
       const file = body.file;
       if (!file) throw new ApiError(400, "File tidak ditemukan");
 
-      let wb: XLSX.WorkBook;
-      try {
-        wb = XLSX.read(await file.arrayBuffer(), { type: "buffer" });
-      } catch {
-        throw new ApiError(400, "File bukan XLSX yang valid");
-      }
-      const sheetName = wb.SheetNames[0];
-      if (!sheetName) throw new ApiError(400, "File kosong — tidak ada sheet data");
-      const sheet = wb.Sheets[sheetName];
-      if (!sheet) throw new ApiError(400, "File kosong — tidak ada sheet data");
-
-      const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false });
-      if (aoa.length < 2) throw new ApiError(400, "File tidak memiliki baris data");
-      if (aoa.length - 1 > IMPORT_MAX_ROWS) {
-        throw new ApiError(400, `Terlalu banyak baris (maks ${IMPORT_MAX_ROWS})`);
-      }
-
-      const cols = findCols(aoa[0]!);
-      if (cols.sku < 0 || cols.name < 0) {
-        throw new ApiError(400, "Kolom SKU dan Nama wajib ada di baris pertama (header)");
-      }
-
+      const parsed = parseItemWorkbook(await file.arrayBuffer());
       const mode = query.mode === "overwrite" ? "overwrite" : "skip";
       const importKey = headers["idempotency-key"] ?? null;
 
-      const existing = await db.select({ sku: items.sku, id: items.id }).from(items);
-      const skuMap = new Map<string, string>();
-      for (const r of existing) skuMap.set(r.sku.toLowerCase(), r.id);
-      const seenInFile = new Set<string>();
+      const result = await applyItemImport(parsed.rows, {
+        mode,
+        idempotencyKey: importKey,
+        maxDate: parsed.maxDate,
+      });
+      const errors = [...parsed.errors, ...result.errors];
 
-      const errors: { row: number; message: string }[] = [];
-      let created = 0;
-      let overwritten = 0;
-      let skipped = 0;
-      let initialStockQty = 0;
-      let maxImportDate = "";
-      const initialLines: { itemId: string; qty: number }[] = [];
-
-      for (let i = 1; i < aoa.length; i++) {
-        const raw = aoa[i]!;
-        if (raw.every((c) => c === null || c === undefined || String(c).trim() === "")) continue;
-        const rowNum = i + 1;
-
-        const sku = String(raw[cols.sku] ?? "").trim();
-        const name = String(raw[cols.name] ?? "").trim();
-        if (!sku || !name) {
-          errors.push({ row: rowNum, message: "SKU dan Nama wajib diisi" });
-          continue;
-        }
-        const skuKey = sku.toLowerCase();
-        if (seenInFile.has(skuKey)) {
-          errors.push({ row: rowNum, message: "SKU duplikat dalam file" });
-          continue;
-        }
-        seenInFile.add(skuKey);
-
-        const model =
-          cols.model >= 0 && raw[cols.model] != null && String(raw[cols.model]).trim() !== ""
-            ? String(raw[cols.model]).trim()
-            : null;
-        const variant =
-          cols.variant >= 0 && raw[cols.variant] != null && String(raw[cols.variant]).trim() !== ""
-            ? String(raw[cols.variant]).trim()
-            : null;
-        const unit =
-          cols.unit >= 0 && raw[cols.unit] != null && String(raw[cols.unit]).trim() !== ""
-            ? String(raw[cols.unit]).trim()
-            : "pcs";
-        const minStock = cols.minStock >= 0 ? parseNum(raw[cols.minStock]) : 0;
-        const initialStock = cols.initialStock >= 0 ? parseNum(raw[cols.initialStock]) : 0;
-        if (minStock === null || minStock < 0) {
-          errors.push({ row: rowNum, message: "Stok Min harus angka ≥ 0" });
-          continue;
-        }
-        if (initialStock === null || initialStock < 0) {
-          errors.push({ row: rowNum, message: "Stok Awal harus angka ≥ 0" });
-          continue;
-        }
-
-        const isActive = cols.status >= 0 ? parseStatus(raw[cols.status]) : true;
-        let rowDate: string | null = null;
-        if (cols.tanggal >= 0 && raw[cols.tanggal] != null && String(raw[cols.tanggal]).trim() !== "") {
-          rowDate = parseTanggal(raw[cols.tanggal]);
-          if (!rowDate) {
-            errors.push({ row: rowNum, message: "Tanggal tidak valid (format YYYY-MM-DD)" });
-            continue;
-          }
-          const today = todayIso();
-          if (rowDate > today) {
-            errors.push({ row: rowNum, message: "Tanggal tidak boleh di masa depan" });
-            continue;
-          }
-        }
-        if (rowDate) maxImportDate = maxImportDate > rowDate ? maxImportDate : rowDate;
-
-        const existingId = skuMap.get(skuKey);
-        if (existingId) {
-          if (mode === "skip") {
-            skipped++;
-            continue;
-          }
-          try {
-            await db
-              .update(items)
-              .set({
-                name,
-                model,
-                variant,
-                unit,
-                minStock: Math.floor(minStock),
-                isActive,
-                updatedAt: sql`now()`,
-              })
-              .where(eq(items.id, existingId));
-            overwritten++;
-          } catch {
-            errors.push({ row: rowNum, message: "Gagal memperbarui barang" });
-          }
-          continue;
-        }
-
-        try {
-          const [ins] = await db
-            .insert(items)
-            .values({
-              sku,
-              name,
-              model,
-              variant,
-              unit,
-              minStock: Math.floor(minStock),
-              stock: 0,
-              isActive,
-            })
-            .returning({ id: items.id });
-          if (!ins) throw new Error("insert gagal");
-          created++;
-          skuMap.set(skuKey, ins.id);
-          const init = Math.floor(initialStock);
-          if (init > 0) {
-            initialLines.push({ itemId: ins.id, qty: init });
-            initialStockQty += init;
-          }
-        } catch (err) {
-          if (isUniqueViolation(err)) {
-            errors.push({ row: rowNum, message: "SKU sudah digunakan" });
-          } else {
-            errors.push({ row: rowNum, message: "Gagal menyimpan barang" });
-          }
-        }
-      }
-
-      let notaNumber: string | null = null;
-      if (initialLines.length > 0) {
-        const res = await createTransaction({
-          type: "in",
-          date: maxImportDate || todayIso(),
-          note: "Import — stok awal",
-          lines: initialLines,
-          idempotencyKey: importKey ? `import:${importKey}` : undefined,
-          allowInactive: true,
-        });
-        if (!res.replay) notaNumber = res.number;
-      }
-
-      if (created > 0) {
-        invalidateStatsCache();
+      if (result.created > 0 || result.overwritten > 0) {
         await logAudit(user, "items.import", "items", undefined, {
-          created,
-          overwritten,
-          skipped,
-          initialStockQty,
+          created: result.created,
+          overwritten: result.overwritten,
+          skipped: result.skipped,
+          initialStockQty: result.initialStockQty,
           errors: errors.length,
         });
         await publishEvent({ kind: "item:updated", data: { id: "import", name: "Import barang" } });
       }
 
-      return { created, overwritten, skipped, initialStockQty, notaNumber, errors };
+      return { ...result, errors };
     },
     {
       body: t.Object({ file: t.File({ maxSize: IMPORT_MAX_BYTES }) }),
@@ -505,7 +260,6 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
           .returning();
         set.status = 201;
         if (!created) throw new ApiError(500, "Gagal membuat barang");
-        invalidateStatsCache();
         await logAudit(user, "items.create", "items", created.id, { sku: created.sku, name: created.name });
         await publishEvent({ kind: "item:updated", data: { id: created.id, name: created.name } });
         return { replay: false, item: created };
@@ -530,7 +284,6 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
           .where(eq(items.id, params.id))
           .returning();
         if (!updated) throw new ApiError(404, "Barang tidak ditemukan");
-        invalidateStatsCache();
         await logAudit(user, "items.edit", "items", updated.id, { sku: updated.sku });
         await publishEvent({ kind: "item:updated", data: { id: updated.id, name: updated.name } });
         return { item: updated };
@@ -557,7 +310,6 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
         .where(eq(items.id, params.id))
         .returning({ id: items.id });
       if (!deleted) throw new ApiError(404, "Barang tidak ditemukan");
-      invalidateStatsCache();
       await logAudit(user, "items.delete", "items", deleted.id, {});
       await publishEvent({ kind: "item:deleted", data: { id: deleted.id } });
       return { ok: true };
