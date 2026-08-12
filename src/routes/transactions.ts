@@ -8,6 +8,7 @@ import {
   exportTransactions,
   getTransactionDetail,
   listTransactions,
+  voidTransaction,
 } from "../transactions.service";
 import { dateTimeCell, xlsxAttachment } from "../xlsx";
 import { logAudit } from "../audit";
@@ -172,6 +173,23 @@ export const transactionRoutes = new Elysia({ prefix: "/api/transactions" }).use
       return { ...result, replay: false };
     },
     { body: createSchema },
+  )
+  .post(
+    "/:id/void",
+    async ({ params, user }) => {
+      requirePerm(user, "transactions:void");
+      const result = await voidTransaction(params.id);
+      invalidateStatsCache();
+      await logAudit(user, "transactions.void", "transactions", params.id, {
+        number: result.number,
+      });
+      await publishEvent({
+        kind: "transaction:voided",
+        data: { id: params.id, number: result.number },
+      });
+      return result;
+    },
+    { params: idParam },
   )
   .get("/:id", async ({ params, user }) => {
     requirePerm(user, "transactions:view");

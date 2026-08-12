@@ -20,16 +20,23 @@ export type SessionPayload = {
 
 export async function ensureAdminUser() {
   const [existing] = await db.select().from(users).where(eq(users.username, env.ADMIN_USERNAME)).limit(1);
-  if (existing) return;
-  const hash = await Bun.password.hash(env.ADMIN_PASSWORD, { algorithm: "argon2id" });
-  await db.insert(users).values({
-    username: env.ADMIN_USERNAME,
-    passwordHash: hash,
-    name: "Administrator",
-    permissions: fullPermissions(),
-    isBootstrap: true,
-  });
-  console.log(`[auth] user admin "${env.ADMIN_USERNAME}" dibuat.`);
+  if (!existing) {
+    const hash = await Bun.password.hash(env.ADMIN_PASSWORD, { algorithm: "argon2id" });
+    await db.insert(users).values({
+      username: env.ADMIN_USERNAME,
+      passwordHash: hash,
+      name: "Administrator",
+      permissions: fullPermissions(),
+      isBootstrap: true,
+    });
+    console.log(`[auth] user admin "${env.ADMIN_USERNAME}" dibuat.`);
+    return;
+  }
+  // bootstrap admin selalu penuh — ikut katalog permission terbaru
+  await db
+    .update(users)
+    .set({ permissions: fullPermissions() })
+    .where(eq(users.id, existing.id));
 }
 
 export async function createSession(userId: string, username: string): Promise<string> {

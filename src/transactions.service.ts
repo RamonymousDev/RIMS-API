@@ -1,4 +1,4 @@
-import { and, eq, gte, ilike, inArray, lt, or, sql } from "drizzle-orm";
+import { and, eq, gte, ilike, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { db } from "./db/client";
 import { businessPartners, counters, items, transactionItems, transactions } from "./db/schema";
@@ -201,6 +201,63 @@ export async function createTransaction(input: TransactionInput): Promise<Create
   }
 }
 
+export async function voidTransaction(id: string): Promise<{ voided: true; number: string }> {
+  const result = await db.transaction(async (tx) => {
+    const [trx] = await tx
+      .select({
+        id: transactions.id,
+        number: transactions.number,
+        type: transactions.type,
+        voidedAt: transactions.voidedAt,
+      })
+      .from(transactions)
+      .where(eq(transactions.id, id))
+      .limit(1)
+      .for("update");
+    if (!trx) throw new ApiError(404, "Nota tidak ditemukan");
+    if (trx.voidedAt) throw new ApiError(400, "Nota sudah dibatalkan");
+
+    const lines = await tx
+      .select({ itemId: transactionItems.itemId, qty: transactionItems.qty })
+      .from(transactionItems)
+      .where(eq(transactionItems.transactionId, id));
+
+    if (lines.length > 0) {
+      const locked = await tx
+        .select({ id: items.id, stock: items.stock })
+        .from(items)
+        .where(inArray(items.id, lines.map((l) => l.itemId)))
+        .orderBy(items.id)
+        .for("update");
+      const stockById = new Map(locked.map((i) => [i.id, i.stock]));
+
+      // guard: reversal tidak boleh membuat stok negatif
+      for (const line of lines) {
+        const cur = stockById.get(line.itemId) ?? 0;
+        const after = trx.type === "in" ? cur - line.qty : cur + line.qty;
+        if (after < 0) {
+          throw new ApiError(
+            400,
+            `Tidak bisa membatalkan: stok barang menjadi negatif (${after})`,
+          );
+        }
+      }
+
+      for (const line of lines) {
+        const delta = trx.type === "in" ? -line.qty : line.qty;
+        await tx
+          .update(items)
+          .set({ stock: sql`${items.stock} + ${delta}`, updatedAt: sql`now()` })
+          .where(eq(items.id, line.itemId));
+      }
+    }
+
+    await tx.update(transactions).set({ voidedAt: sql`now()` }).where(eq(transactions.id, id));
+    return { voided: true as const, number: trx.number };
+  });
+  return result;
+}
+
 export type TransactionDetail = {
   id: string;
   number: string;
@@ -208,6 +265,7 @@ export type TransactionDetail = {
   date: string;
   note: string | null;
   partner: { id: string; code: string; name: string; type: string } | null;
+  voidedAt: Date | null;
   createdAt: Date;
   items: { itemId: string; name: string; sku: string; unit: string; qty: number }[];
 };
@@ -224,6 +282,7 @@ export async function getTransactionDetail(id: string): Promise<TransactionDetai
       partnerCode: businessPartners.code,
       partnerName: businessPartners.name,
       partnerType: businessPartners.type,
+      voidedAt: transactions.voidedAt,
       createdAt: transactions.createdAt,
     })
     .from(transactions)
@@ -316,6 +375,7 @@ export async function listTransactions(opts: TransactionListFilters & {
       partnerId: transactions.partnerId,
       partnerCode: businessPartners.code,
       partnerName: businessPartners.name,
+      voidedAt: transactions.voidedAt,
       createdAt: transactions.createdAt,
       itemCount: sql<number>`count(${transactionItems.id})::int`,
       totalQty: sql<number>`coalesce(sum(${transactionItems.qty}), 0)::int`,
@@ -335,6 +395,7 @@ export async function listTransactions(opts: TransactionListFilters & {
     date: r.date,
     note: r.note,
     partner: r.partnerId && r.partnerCode ? { id: r.partnerId, code: r.partnerCode, name: r.partnerName ?? "" } : null,
+    voidedAt: r.voidedAt,
     createdAt: r.createdAt,
     itemCount: r.itemCount,
     totalQty: r.totalQty,
@@ -349,6 +410,7 @@ export type ExportTransaction = {
   type: "in" | "out";
   note: string | null;
   partner: { code: string; name: string } | null;
+  voidedAt: Date | null;
   lines: {
     sku: string;
     name: string;
@@ -361,6 +423,8 @@ export type ExportTransaction = {
 
 export async function exportTransactions(opts: TransactionListFilters): Promise<ExportTransaction[]> {
   const conditions = transactionFilters(opts);
+  // nota yang dibatalkan tidak ikut rekap export
+  conditions.push(isNull(transactions.voidedAt));
 
   const rows = await db
     .select({
@@ -373,6 +437,7 @@ export async function exportTransactions(opts: TransactionListFilters): Promise<
       partnerId: transactions.partnerId,
       partnerCode: businessPartners.code,
       partnerName: businessPartners.name,
+      voidedAt: transactions.voidedAt,
       sku: items.sku,
       name: items.name,
       model: items.model,
@@ -399,6 +464,7 @@ export async function exportTransactions(opts: TransactionListFilters): Promise<
         type: r.type,
         note: r.note,
         partner: r.partnerId && r.partnerCode ? { code: r.partnerCode, name: r.partnerName ?? "" } : null,
+        voidedAt: r.voidedAt,
         lines: [],
       };
       grouped.set(r.id, tx);

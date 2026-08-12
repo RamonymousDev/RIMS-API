@@ -1,6 +1,6 @@
 import { Elysia, t } from "elysia";
 import { eq, sql } from "drizzle-orm";
-import { clearCookie, cookieFor, createSession, destroySession } from "../auth";
+import { clearCookie, cookieFor, createSession, destroySession, listUserSessions } from "../auth";
 import { ApiError } from "../http";
 import { authGuard, checkLoginRate, clearLoginRate, requirePerm } from "../security";
 import { COOKIE_NAME } from "../auth";
@@ -52,6 +52,16 @@ export const authRoutes = new Elysia({ prefix: "/api/auth" }).use(authGuard())
     },
     { body: loginSchema },
   )
+  .post("/logout-all", async ({ user, authed, sessionToken }) => {
+    if (!authed || !user) throw new ApiError(401, "Belum login");
+    // revoke semua sesi user KECUALI sesi saat ini
+    const sessions = await listUserSessions(user.id);
+    for (const s of sessions) {
+      if (s.token !== sessionToken) await destroySession(s.token);
+    }
+    await logAudit({ id: user.id, username: user.username }, "auth.logout-all", "users", user.id);
+    return { ok: true };
+  })
   .post("/logout", async ({ cookie, set, user }) => {
     const token = (cookie[COOKIE_NAME]?.value ?? "") as string;
     await destroySession(token);

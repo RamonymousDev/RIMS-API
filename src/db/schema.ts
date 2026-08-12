@@ -104,6 +104,7 @@ export const transactions = pgTable(
     date: date("date").notNull().default(sql`CURRENT_DATE`),
     note: text("note"),
     partnerId: uuid("partner_id").references(() => businessPartners.id, { onDelete: "set null" }),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
     idempotencyKey: text("idempotency_key"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

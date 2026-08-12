@@ -1,0 +1,1 @@
+ALTER TABLE "transactions" ADD COLUMN "voided_at" timestamp with time zone;

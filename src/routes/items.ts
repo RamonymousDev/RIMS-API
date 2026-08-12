@@ -1,8 +1,8 @@
-import { and, asc, count, eq, ilike, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { Elysia, t } from "elysia";
 import * as XLSX from "xlsx";
 import { db } from "../db/client";
-import { items, transactionItems } from "../db/schema";
+import { businessPartners, items, transactionItems, transactions } from "../db/schema";
 import { ApiError } from "../http";
 import { publishEvent } from "../redis";
 import { authGuard, requirePerm } from "../security";
@@ -502,6 +502,73 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
       await logAudit(user, "items.delete", "items", deleted.id, {});
       await publishEvent({ kind: "item:deleted", data: { id: deleted.id } });
       return { ok: true };
+    },
+    { params: t.Object({ id: t.String() }) },
+  )
+  .get(
+    "/:id/transactions",
+    async ({ params, user }) => {
+      requirePerm(user, "items:view");
+      const [item] = await db
+        .select({ id: items.id, name: items.name, sku: items.sku, stock: items.stock })
+        .from(items)
+        .where(eq(items.id, params.id))
+        .limit(1);
+      if (!item) throw new ApiError(404, "Barang tidak ditemukan");
+
+      const rows = await db
+        .select({
+          transactionId: transactions.id,
+          number: transactions.number,
+          date: transactions.date,
+          type: transactions.type,
+          qty: transactionItems.qty,
+          voidedAt: transactions.voidedAt,
+          note: transactions.note,
+          createdAt: transactions.createdAt,
+          partnerCode: businessPartners.code,
+          partnerName: businessPartners.name,
+        })
+        .from(transactionItems)
+        .innerJoin(transactions, eq(transactionItems.transactionId, transactions.id))
+        .leftJoin(businessPartners, eq(transactions.partnerId, businessPartners.id))
+        .where(eq(transactionItems.itemId, params.id))
+        .orderBy(desc(transactions.date), desc(transactions.createdAt), desc(transactions.id));
+
+      // stok berjalan: mundur dari stok sekarang, hanya nota yang tidak dibatalkan
+      let running = item.stock;
+      const data = rows.map((r) => {
+        if (r.voidedAt) {
+          return {
+            id: r.transactionId,
+            number: r.number,
+            date: r.date,
+            type: r.type,
+            qty: r.qty,
+            voidedAt: r.voidedAt,
+            note: r.note,
+            createdAt: r.createdAt,
+            partner: r.partnerCode ? { code: r.partnerCode, name: r.partnerName ?? "" } : null,
+            runningStock: null as number | null,
+          };
+        }
+        const delta = r.type === "in" ? r.qty : -r.qty;
+        running -= delta;
+        return {
+          id: r.transactionId,
+          number: r.number,
+          date: r.date,
+          type: r.type,
+          qty: r.qty,
+          voidedAt: null,
+          note: r.note,
+          createdAt: r.createdAt,
+          partner: r.partnerCode ? { code: r.partnerCode, name: r.partnerName ?? "" } : null,
+          runningStock: running,
+        };
+      });
+
+      return { item, data };
     },
     { params: t.Object({ id: t.String() }) },
   )

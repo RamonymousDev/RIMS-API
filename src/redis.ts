@@ -2,6 +2,7 @@ export const EVENT_CHANNEL = "rims:events";
 
 export type FeedEvent =
   | { kind: "transaction:created"; data: Record<string, unknown> }
+  | { kind: "transaction:voided"; data: Record<string, unknown> }
   | { kind: "item:updated"; data: Record<string, unknown> }
   | { kind: "item:deleted"; data: Record<string, unknown> }
   | { kind: "partner:updated"; data: Record<string, unknown> }

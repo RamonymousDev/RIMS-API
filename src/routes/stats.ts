@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { Elysia, t } from "elysia";
 import { db } from "../db/client";
 import { businessPartners, items, transactions, transactionItems } from "../db/schema";
@@ -28,7 +28,7 @@ async function countQtySince(type: "in" | "out", since: Date) {
     })
     .from(transactions)
     .innerJoin(transactionItems, eq(transactionItems.transactionId, transactions.id))
-    .where(and(eq(transactions.type, type), gte(transactions.date, dateToStr(since))));
+    .where(and(eq(transactions.type, type), isNull(transactions.voidedAt), gte(transactions.date, dateToStr(since))));
   return { count: row?.n ?? 0, qty: row?.qty ?? 0 };
 }
 
@@ -66,7 +66,7 @@ async function computeStats() {
     })
     .from(transactions)
     .innerJoin(transactionItems, eq(transactionItems.transactionId, transactions.id))
-    .where(gte(transactions.date, dateToStr(start14)))
+    .where(and(isNull(transactions.voidedAt), gte(transactions.date, dateToStr(start14))))
     .groupBy(sql`to_char(${transactions.date}, 'YYYY-MM-DD')`, transactions.type)
     .orderBy(sql`to_char(${transactions.date}, 'YYYY-MM-DD')`);
 
@@ -123,7 +123,7 @@ async function computeStats() {
         .from(transactions)
         .innerJoin(businessPartners, eq(transactions.partnerId, businessPartners.id))
         .innerJoin(transactionItems, eq(transactionItems.transactionId, transactions.id))
-        .where(and(eq(transactions.type, type), gte(transactions.date, dateToStr(start30))))
+        .where(and(eq(transactions.type, type), isNull(transactions.voidedAt), gte(transactions.date, dateToStr(start30))))
         .groupBy(businessPartners.id)
         .orderBy(desc(sql`count(${transactions.id})`), desc(sql`sum(${transactionItems.qty})`))
         .limit(5)

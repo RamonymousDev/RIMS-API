@@ -9,6 +9,7 @@ export const PERMISSIONS = {
   "transactions:view": "Lihat Transaksi",
   "transactions:create": "Buat Transaksi",
   "transactions:export": "Export Transaksi",
+  "transactions:void": "Batalkan Transaksi",
   "partners:view": "Lihat Mitra",
   "partners:create": "Tambah Mitra",
   "partners:edit": "Edit Mitra",
