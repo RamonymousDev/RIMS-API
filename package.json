@@ -1,0 +1,27 @@
+{
+  "name": "rims-api",
+  "version": "1.0.0",
+  "type": "module",
+  "module": "src/index.ts",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "bun src/db/migrate.ts",
+    "db:seed": "bun src/db/seed.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@elysiajs/cors": "^1.4.2",
+    "drizzle-orm": "^0.45.2",
+    "elysia": "^1.4.29",
+    "postgres": "^3.4.5",
+    "valibot": "^1.4.2",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.12",
+    "drizzle-kit": "^0.31.4",
+    "typescript": "^5.8.3"
+  }
+}
