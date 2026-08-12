@@ -1,4 +1,4 @@
-import { and, desc, eq, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, lt, or, sql } from "drizzle-orm";
 import { Elysia, t } from "elysia";
 import { db } from "../db/client";
 import { auditLogs, users } from "../db/schema";
@@ -192,6 +192,16 @@ export const userRoutes = new Elysia({ prefix: "/api/users" }).use(authGuard())
     { params: t.Object({ id: t.String(), token: t.String() }) },
   );
 
+function parseQueryDate(raw?: string): Date | undefined {
+  if (!raw) return undefined;
+  const [y, m, d] = raw.split("-").map(Number);
+  if (!y || !m || !d || y < 1970 || y > 9999 || m < 1 || m > 12 || d < 1 || d > 31) {
+    return undefined;
+  }
+  const date = new Date(y, m - 1, d);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
 function parseAuditCursor(raw?: string): { createdAt: Date; id: string } | undefined {
   if (!raw) return undefined;
   const [iso, id] = raw.split("|");
@@ -211,8 +221,30 @@ export const auditRoutes = new Elysia({ prefix: "/api/audit" }).use(authGuard())
     requirePerm(user, "users:view");
     const limit = Math.min(200, Math.max(1, Number(query.limit ?? "50")));
     const cursor = parseAuditCursor(query.cursor);
+    const search = query.search?.trim();
+    const action = query.action?.trim();
 
     const conditions = [];
+    if (search) {
+      const q = `%${search}%`;
+      conditions.push(
+        or(
+          ilike(auditLogs.actorName, q),
+          ilike(auditLogs.action, q),
+          ilike(auditLogs.target, q),
+          ilike(auditLogs.detail, q),
+        ),
+      );
+    }
+    if (action) conditions.push(eq(auditLogs.action, action));
+    const from = parseQueryDate(query.from);
+    if (from) conditions.push(gte(auditLogs.createdAt, from));
+    const to = parseQueryDate(query.to);
+    if (to) {
+      const end = new Date(to);
+      end.setDate(end.getDate() + 1);
+      conditions.push(lt(auditLogs.createdAt, end));
+    }
     if (cursor) {
       conditions.push(
         or(
@@ -243,5 +275,14 @@ export const auditRoutes = new Elysia({ prefix: "/api/audit" }).use(authGuard())
     const nextCursor = rows.length === limit ? auditToCursor(rows[rows.length - 1]!) : null;
     return { data: rows, nextCursor };
   },
-  { query: t.Object({ limit: t.Optional(t.String()), cursor: t.Optional(t.String()) }) },
+  {
+    query: t.Object({
+      limit: t.Optional(t.String()),
+      cursor: t.Optional(t.String()),
+      search: t.Optional(t.String()),
+      action: t.Optional(t.String()),
+      from: t.Optional(t.String()),
+      to: t.Optional(t.String()),
+    }),
+  },
 );

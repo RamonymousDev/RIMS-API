@@ -49,7 +49,7 @@ async function computeStats() {
   const [lowStockRow] = await db
     .select({ n: count() })
     .from(items)
-    .where(sql`${items.stock} <= ${items.minStock}`);
+    .where(and(sql`${items.stock} <= ${items.minStock}`, eq(items.isActive, true)));
 
   const [todayInRow, todayOutRow, monthInRow, monthOutRow] = await Promise.all([
     countQtySince("in", startToday),
@@ -103,7 +103,7 @@ async function computeStats() {
       minStock: items.minStock,
     })
     .from(items)
-    .where(sql`${items.stock} <= ${items.minStock}`)
+    .where(and(sql`${items.stock} <= ${items.minStock}`, eq(items.isActive, true)))
     .orderBy(sql`${items.stock} asc`)
     .limit(5);
 
