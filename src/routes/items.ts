@@ -44,6 +44,8 @@ type ImportCols = {
   unit: number;
   minStock: number;
   initialStock: number;
+  status: number;
+  tanggal: number;
 };
 
 const HEADER_ALIASES: Record<keyof ImportCols, string[]> = {
@@ -54,6 +56,8 @@ const HEADER_ALIASES: Record<keyof ImportCols, string[]> = {
   unit: ["satuan", "unit"],
   minStock: ["stokmin", "stokminimum", "minstock"],
   initialStock: ["stokawal", "stockawal", "initialstock"],
+  status: ["status", "aktif"],
+  tanggal: ["tanggal", "date"],
 };
 
 function normHeader(s: string): string {
@@ -84,6 +88,27 @@ function parseNum(v: unknown): number | null {
   if (v === null || v === undefined || String(v).trim() === "") return null;
   const n = Number(String(v).trim());
   return Number.isFinite(n) ? n : null;
+}
+
+function parseStatus(v: unknown): boolean {
+  if (v === null || v === undefined || String(v).trim() === "") return true;
+  const s = String(v).trim().toLowerCase();
+  return !(s === "0" || s === "false" || s === "nonaktif" || s === "tidak" || s === "no");
+}
+
+function parseTanggal(v: unknown): string | null {
+  if (v === null || v === undefined || String(v).trim() === "") return null;
+  const s = String(v).trim();
+  // excel kadang memberi Date object
+  if (s.match(/^\d{4}-\d{2}-\d{2}$/)) return s;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function todayIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function isUniqueViolation(err: unknown): boolean {
@@ -230,9 +255,25 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
       return xlsxAttachment(
         {
           Barang: [
-            ["SKU", "Nama", "Model", "Varian", "Satuan", "Stok Min", "Stok Awal"],
-            ["LAP-100", "Laptop Workstation", "ThinkBook 16", "Intel i7 / 16GB", "unit", 3, 10],
-            ["", "", "", "", "", "", ""],
+            ["SKU", "Nama", "Model", "Varian", "Satuan", "Stok Min", "Stok Awal", "Status", "Tanggal"],
+            ["", "", "", "", "", "", "", "", ""],
+          ],
+          Petunjuk: [
+            ["PETUNJUK IMPORT BARANG (sheet ini tidak diimport)"],
+            [""],
+            ["Kolom WAJIB: SKU, Nama"],
+            ["Kolom opsional: Model, Varian, Satuan, Stok Min, Stok Awal, Status, Tanggal"],
+            [""],
+            ["- Stok Awal hanya berlaku untuk item BARU; dicatat sebagai nota masuk 'Import — stok awal'"],
+            ["- Status: kosong/Aktif/ya/1 = aktif, Nonaktif/tidak/0 = nonaktif"],
+            ["- Tanggal (YYYY-MM-DD): tanggal nota stok awal; kosong = hari ini; tidak boleh di masa depan"],
+            ["- Mode 'lewati duplikat': SKU yang sudah ada dilewati; 'timpa duplikat': data diperbarui (termasuk Status)"],
+            ["- Header kolom tidak sensitif huruf besar/kecil"],
+            ["- Re-import aman: tidak menggandakan stok"],
+            [""],
+            ["CONTOH PENGISIAN:"],
+            ["SKU", "Nama", "Model", "Varian", "Satuan", "Stok Min", "Stok Awal", "Status", "Tanggal"],
+            ["LAP-100", "Laptop Workstation", "ThinkBook 16", "Intel i7 / 16GB", "unit", 3, 10, "Aktif", "2026-08-01"],
           ],
         },
         "template-import-barang.xlsx",
@@ -281,6 +322,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
       let overwritten = 0;
       let skipped = 0;
       let initialStockQty = 0;
+      let maxImportDate = "";
       const initialLines: { itemId: string; qty: number }[] = [];
 
       for (let i = 1; i < aoa.length; i++) {
@@ -324,6 +366,22 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
           continue;
         }
 
+        const isActive = cols.status >= 0 ? parseStatus(raw[cols.status]) : true;
+        let rowDate: string | null = null;
+        if (cols.tanggal >= 0 && raw[cols.tanggal] != null && String(raw[cols.tanggal]).trim() !== "") {
+          rowDate = parseTanggal(raw[cols.tanggal]);
+          if (!rowDate) {
+            errors.push({ row: rowNum, message: "Tanggal tidak valid (format YYYY-MM-DD)" });
+            continue;
+          }
+          const today = todayIso();
+          if (rowDate > today) {
+            errors.push({ row: rowNum, message: "Tanggal tidak boleh di masa depan" });
+            continue;
+          }
+        }
+        if (rowDate) maxImportDate = maxImportDate > rowDate ? maxImportDate : rowDate;
+
         const existingId = skuMap.get(skuKey);
         if (existingId) {
           if (mode === "skip") {
@@ -339,6 +397,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
                 variant,
                 unit,
                 minStock: Math.floor(minStock),
+                isActive,
                 updatedAt: sql`now()`,
               })
               .where(eq(items.id, existingId));
@@ -360,6 +419,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
               unit,
               minStock: Math.floor(minStock),
               stock: 0,
+              isActive,
             })
             .returning({ id: items.id });
           if (!ins) throw new Error("insert gagal");
@@ -381,14 +441,13 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
 
       let notaNumber: string | null = null;
       if (initialLines.length > 0) {
-        const d = new Date();
-        const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
         const res = await createTransaction({
           type: "in",
-          date: today,
+          date: maxImportDate || todayIso(),
           note: "Import — stok awal",
           lines: initialLines,
           idempotencyKey: importKey ? `import:${importKey}` : undefined,
+          allowInactive: true,
         });
         if (!res.replay) notaNumber = res.number;
       }

@@ -13,6 +13,8 @@ export type TransactionInput = {
   lines: { itemId: string; qty: number }[];
   partnerId?: string | null;
   idempotencyKey?: string | null;
+  // nota sistem (mis. import stok awal) boleh menyentuh barang nonaktif
+  allowInactive?: boolean;
 };
 
 export function dateToStr(d: Date): string {
@@ -67,7 +69,7 @@ type CreateResult =
   | { replay: false; transactionId: string; number: string };
 
 export async function createTransaction(input: TransactionInput): Promise<CreateResult> {
-  const { type, date, note, partnerId, idempotencyKey } = input;
+  const { type, date, note, partnerId, idempotencyKey, allowInactive } = input;
   const rawLines = input.lines;
 
   if (rawLines.length === 0) {
@@ -126,7 +128,7 @@ export async function createTransaction(input: TransactionInput): Promise<Create
       if (locked.length !== finalLines.length) {
         throw new ApiError(400, "Ada barang yang tidak ditemukan");
       }
-      if (locked.some((i) => !i.isActive)) {
+      if (!allowInactive && locked.some((i) => !i.isActive)) {
         throw new ApiError(400, "Salah satu barang tidak aktif");
       }
       const stockById = new Map(locked.map((i) => [i.id, i.stock]));

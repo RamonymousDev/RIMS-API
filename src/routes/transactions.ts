@@ -10,7 +10,7 @@ import {
   listTransactions,
   voidTransaction,
 } from "../transactions.service";
-import { dateTimeCell, xlsxAttachment } from "../xlsx";
+import { xlsxAttachment } from "../xlsx";
 import { logAudit } from "../audit";
 
 const lineSchema = t.Object({

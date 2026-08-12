@@ -27,7 +27,3 @@ export function xlsxAttachment(sheets: Record<string, unknown[][]>, filename: st
     },
   });
 }
-
-export function dateTimeCell(d: Date): string {
-  return d.toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" });
-}
