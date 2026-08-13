@@ -7,6 +7,7 @@ import { publishEvent } from "../redis";
 import { authGuard, requirePerm } from "../security";
 import { logAudit } from "../audit";
 import { applyItemImport, IMPORT_MAX_BYTES, isUniqueViolation, parseItemWorkbook } from "../import-items";
+import { computeItemHistory } from "../item-history";
 import { xlsxAttachment } from "../xlsx";
 
 const itemSchema = t.Object({
@@ -348,38 +349,20 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
         .where(eq(transactionItems.itemId, params.id))
         .orderBy(desc(transactions.date), desc(transactions.createdAt), desc(transactions.id));
 
-      // stok berjalan: mundur dari stok sekarang, hanya nota yang tidak dibatalkan
-      let running = item.stock;
-      const data = rows.map((r) => {
-        if (r.voidedAt) {
-          return {
-            id: r.transactionId,
-            number: r.number,
-            date: r.date,
-            type: r.type,
-            qty: r.qty,
-            voidedAt: r.voidedAt,
-            note: r.note,
-            createdAt: r.createdAt,
-            partner: r.partnerCode ? { code: r.partnerCode, name: r.partnerName ?? "" } : null,
-            runningStock: null as number | null,
-          };
-        }
-        const delta = r.type === "in" ? r.qty : -r.qty;
-        running -= delta;
-        return {
+      const data = computeItemHistory(
+        rows.map((r) => ({
           id: r.transactionId,
           number: r.number,
           date: r.date,
           type: r.type,
           qty: r.qty,
-          voidedAt: null,
+          voidedAt: r.voidedAt,
           note: r.note,
           createdAt: r.createdAt,
           partner: r.partnerCode ? { code: r.partnerCode, name: r.partnerName ?? "" } : null,
-          runningStock: running,
-        };
-      });
+        })),
+        item.stock,
+      );
 
       return { item, data };
     },
