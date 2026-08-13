@@ -86,6 +86,9 @@ const app = new Elysia()
 
 const port = Number(env.PORT);
 
-app.listen(port, () => {
-  console.log(`[rims] API ready at http://localhost:${port}`);
-});
+app.listen(
+  { port, hostname: env.isProd ? "127.0.0.1" : "0.0.0.0" },
+  () => {
+    console.log(`[rims] API ready at http://${env.isProd ? "127.0.0.1" : "0.0.0.0"}:${port}`);
+  },
+);

@@ -5,8 +5,8 @@ import { users } from "./db/schema";
 import { env } from "./env";
 import { fullPermissions } from "./permissions";
 
-const SESSION_PREFIX = "session:";
-const USER_SESSIONS_PREFIX = "user_sessions:";
+const SESSION_PREFIX = "rims:session:";
+const USER_SESSIONS_PREFIX = "rims:user_sessions:";
 export const SESSION_TTL_ABSOLUTE = 60 * 60 * 24; // 24 jam
 export const SESSION_TTL_IDLE = 60 * 60 * 2; // 2 jam idle
 

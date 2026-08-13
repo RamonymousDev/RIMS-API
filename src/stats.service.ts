@@ -5,7 +5,7 @@ import { formatBusinessDate } from "./dates";
 import { listTransactions } from "./transactions.service";
 import { subscribeFeed } from "./redis";
 
-const STATS_CACHE_KEY = "stats:cache";
+const STATS_CACHE_KEY = "rims:stats:cache";
 const STATS_TTL = 15;
 
 export function invalidateStatsCache() {

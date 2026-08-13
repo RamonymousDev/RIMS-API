@@ -6,7 +6,7 @@ import { db } from "./db/client";
 import { users } from "./db/schema";
 import { eq } from "drizzle-orm";
 
-const RATE_PREFIX = "rl:login:";
+const RATE_PREFIX = "rims:rl:login:";
 
 export type AuthUser = {
   id: string;
