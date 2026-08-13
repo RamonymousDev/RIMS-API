@@ -91,11 +91,18 @@ ExecStart=/home/rims/.bun/bin/bun run start
 Restart=always
 RestartSec=3
 
+# Hardening — API tidak menulis file saat runtime
+ProtectSystem=strict
+PrivateTmp=true
+NoNewPrivileges=true
+
 [Install]
 WantedBy=multi-user.target
 ```
 
 > Sesuaikan `ExecStart` dengan lokasi bun kamu (`which bun`). Jika bun terpasang di `/usr/local/bin/bun`, pakai itu.
+>
+> `ProtectSystem=strict` membuat filesystem read-only saat runtime — aman karena API tidak menulis file. Jika suatu saat perlu menulis (mis. log ke disk), tambahkan `ReadWritePaths=` dengan path yang dimaksud.
 
 Aktifkan & jalankan:
 

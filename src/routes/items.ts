@@ -135,6 +135,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
           unit: items.unit,
           stock: items.stock,
           minStock: items.minStock,
+          isActive: items.isActive,
         })
         .from(items)
         .orderBy(asc(items.name), asc(items.sku));
@@ -142,7 +143,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
       return xlsxAttachment(
         {
           Barang: [
-            ["SKU", "Nama", "Model", "Varian", "Satuan", "Stok", "Stok Min"],
+            ["SKU", "Nama", "Model", "Varian", "Satuan", "Stok", "Stok Min", "Status"],
             ...rows.map((r) => [
               r.sku,
               r.name,
@@ -151,6 +152,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
               r.unit,
               r.stock,
               r.minStock,
+              r.isActive ? "Aktif" : "Nonaktif",
             ]),
           ],
         },
