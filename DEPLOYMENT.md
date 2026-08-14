@@ -11,6 +11,13 @@ Panduan deploy API di server Linux dengan **Bun, Postgres, dan Redis** (tanpa Do
 | Redis | 6+ | **wajib** — sesi, rate limit, pub/sub SSE, dan cache statistik semuanya memakai Redis (`Bun.redis`). Tanpa Redis API tidak bisa jalan. |
 | Apache | 2.4+ | `mod_proxy`, `mod_proxy_http`, `mod_headers`, `mod_ssl` |
 
+> ⚠️ **Zona waktu server penting.** "Hari ini", statistik, filter tanggal, dan validasi tanggal nota semuanya berbasis **zona waktu lokal server** (`dates.ts`). Jika server di UTC sedangkan pengguna di WIB, angka harian akan salah mulai jam 00.00–07.00 WIB. Pastikan:
+>
+> ```bash
+> sudo timedatectl set-timezone Asia/Jakarta   # atau zona operasional yang benar
+> timedatectl                                  # verifikasi
+> ```
+
 Buat user sistem khusus:
 
 ```bash

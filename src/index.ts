@@ -27,16 +27,16 @@ const app = new Elysia()
       allowedHeaders: ["Content-Type", "Idempotency-Key", "X-Requested-With", "Authorization"],
     }),
   )
-  .onAfterHandle(({ response, set, request }) => {
-    if (response instanceof Response) return;
+  .mapResponse(({ response, set, request }) => {
+    // gzip JSON response di API — mapResponse menerima respons sudah-serialisasi (string)
     if (
       typeof response === "string" &&
-      request.headers.get("accept-encoding")?.includes("gzip") &&
-      response.length > 512
+      response.length > 512 &&
+      request.headers.get("accept-encoding")?.includes("gzip")
     ) {
-      const headers = new Headers({ "Content-Encoding": "gzip", Vary: "Accept-Encoding" });
-      headers.set("Content-Type", "application/json; charset=utf-8");
-      return new Response(Bun.gzipSync(response), { headers });
+      set.headers["Content-Encoding"] = "gzip";
+      set.headers["Vary"] = "Accept-Encoding";
+      return new Response(Bun.gzipSync(response));
     }
   })
   .use(securityHeadersPlugin())
