@@ -54,6 +54,17 @@ bun run db:migrate
 ```
 
 > Admin pertama dibuat **otomatis** saat API start (`ensureAdminUser()`) dari `ADMIN_USERNAME`/`ADMIN_PASSWORD`. Jika sudah ada, permission-nya selalu disinkronkan ke set penuh.
+>
+> ⚠️ **`ADMIN_PASSWORD` env HANYA berlaku untuk pembuatan pertama.** Mengubah `ADMIN_PASSWORD` di `.env` **tidak** mengubah hash admin yang sudah ada. Untuk reset password admin produksi: hapus baris user bootstrap dari DB lalu restart API (akan dibuat ulang dari env), atau reset lewat halaman Pengguna (users:manage).
+
+## Checklist sebelum live
+
+- [ ] `timedatectl set-timezone` sesuai zona operasional (lihat catatan di atas)
+- [ ] HTTPS aktif; login menghasilkan cookie `__Host-` dengan `Secure`
+- [ ] `bun run db:migrate` tanpa error; data seed/uji tidak ada
+- [ ] Realtime: buka 2 tab → transaksi di satu tab tampil di tab lain
+- [ ] Backup `pg_dump` diuji restore minimal sekali
+- [ ] `.env` production: `COOKIE_DOMAIN` kosong, `WEB_ORIGIN` = https domain, password admin kuat
 
 ## 3. Konfigurasi `.env`
 
