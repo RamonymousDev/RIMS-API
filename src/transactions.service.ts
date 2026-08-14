@@ -191,7 +191,21 @@ export async function createTransaction(input: TransactionInput): Promise<Create
   }
 }
 
-export async function voidTransaction(id: string): Promise<{ voided: true; number: string }> {
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function resolveTransactionId(ref: string): Promise<string | null> {
+  const isUuid = UUID_RE.test(ref);
+  const [row] = await db
+    .select({ id: transactions.id })
+    .from(transactions)
+    .where(isUuid ? eq(transactions.id, ref) : eq(transactions.number, ref))
+    .limit(1);
+  return row?.id ?? null;
+}
+
+export async function voidTransaction(ref: string): Promise<{ voided: true; number: string }> {
+  const id = await resolveTransactionId(ref);
+  if (!id) throw new ApiError(404, "Nota tidak ditemukan");
   const result = await db.transaction(async (tx) => {
     const [trx] = await tx
       .select({
@@ -260,7 +274,8 @@ export type TransactionDetail = {
   items: { itemId: string; name: string; sku: string; unit: string; qty: number }[];
 };
 
-export async function getTransactionDetail(id: string): Promise<TransactionDetail> {
+export async function getTransactionDetail(ref: string): Promise<TransactionDetail> {
+  const isUuid = UUID_RE.test(ref);
   const [trx] = await db
     .select({
       id: transactions.id,
@@ -277,7 +292,7 @@ export async function getTransactionDetail(id: string): Promise<TransactionDetai
     })
     .from(transactions)
     .leftJoin(businessPartners, eq(transactions.partnerId, businessPartners.id))
-    .where(eq(transactions.id, id))
+    .where(isUuid ? eq(transactions.id, ref) : eq(transactions.number, ref))
     .limit(1);
   if (!trx) throw new ApiError(404, "Nota tidak ditemukan");
 
@@ -291,7 +306,7 @@ export async function getTransactionDetail(id: string): Promise<TransactionDetai
     })
     .from(transactionItems)
     .innerJoin(items, eq(transactionItems.itemId, items.id))
-    .where(eq(transactionItems.transactionId, id))
+    .where(eq(transactionItems.transactionId, trx.id))
     .orderBy(transactionItems.id);
 
   const { partnerId, partnerCode, partnerName, partnerType, ...rest } = trx;
