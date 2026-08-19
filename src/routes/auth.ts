@@ -7,10 +7,13 @@ import { COOKIE_NAME } from "../auth";
 import { db } from "../db/client";
 import { users } from "../db/schema";
 import { logAudit } from "../audit";
+import { generateCaptcha, saveCaptcha, validateCaptcha } from "../captcha";
 
 const loginSchema = t.Object({
   username: t.String({ minLength: 1, maxLength: 64 }),
   password: t.String({ minLength: 1, maxLength: 256 }),
+  captchaId: t.Optional(t.String()),
+  captchaAnswer: t.Optional(t.Number()),
 });
 
 const changePasswordSchema = t.Object({
@@ -29,6 +32,18 @@ export const authRoutes = new Elysia({ prefix: "/api/auth" }).use(authGuard())
         throw new ApiError(429, "Terlalu banyak percobaan login. Coba lagi dalam 1 menit.");
       }
 
+      if (body.captchaId && body.captchaAnswer !== undefined) {
+        const captchaResult = await validateCaptcha(body.captchaId, body.captchaAnswer);
+        if (!captchaResult.valid) {
+          const newCaptcha = generateCaptcha();
+          await saveCaptcha(newCaptcha.captchaId, newCaptcha.answer);
+          return {
+            error: "Jawaban captcha salah",
+            captcha: { captchaId: newCaptcha.captchaId, question: newCaptcha.question, options: newCaptcha.options },
+          };
+        }
+      }
+
       const [row] = await db
         .select({ id: users.id, username: users.username, name: users.name, passwordHash: users.passwordHash })
         .from(users)
@@ -41,7 +56,12 @@ export const authRoutes = new Elysia({ prefix: "/api/auth" }).use(authGuard())
           username: body.username.trim(),
           ip,
         });
-        throw new ApiError(401, "Username atau password salah");
+        const newCaptcha = generateCaptcha();
+        await saveCaptcha(newCaptcha.captchaId, newCaptcha.answer);
+        return {
+          error: "Username atau password salah",
+          captcha: { captchaId: newCaptcha.captchaId, question: newCaptcha.question, options: newCaptcha.options },
+        };
       }
 
       await clearLoginRate(ip);

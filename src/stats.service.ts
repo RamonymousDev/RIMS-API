@@ -1,9 +1,11 @@
-import { and, count, desc, eq, gte, isNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
 import { db } from "./db/client";
 import { businessPartners, items, transactions, transactionItems } from "./db/schema";
 import { formatBusinessDate } from "./dates";
 import { listTransactions } from "./transactions.service";
 import { subscribeFeed } from "./redis";
+
+export type Period = "7d" | "14d" | "30d" | "90d";
 
 const STATS_CACHE_KEY = "rims:stats:cache";
 const STATS_TTL = 15;
@@ -55,13 +57,25 @@ async function countQtySince(type: "in" | "out", since: Date) {
   return { count: row?.n ?? 0, qty: row?.qty ?? 0 };
 }
 
-async function computeStats() {
+function getPeriodDays(period: Period): number {
+  switch (period) {
+    case "7d": return 7;
+    case "14d": return 14;
+    case "30d": return 30;
+    case "90d": return 90;
+  }
+}
+
+async function computeStats(period: Period = "14d") {
   const startToday = new Date();
   startToday.setHours(0, 0, 0, 0);
   const startMonth = new Date(startToday);
   startMonth.setDate(1);
-  const start14 = new Date(startToday);
-  start14.setDate(startToday.getDate() - 13);
+  const periodDays = getPeriodDays(period);
+  const startPeriod = new Date(startToday);
+  startPeriod.setDate(startToday.getDate() - (periodDays - 1));
+  const startPrevPeriod = new Date(startPeriod);
+  startPrevPeriod.setDate(startPeriod.getDate() - periodDays);
   const start30 = new Date(startToday);
   start30.setDate(startToday.getDate() - 29);
 
@@ -81,6 +95,24 @@ async function computeStats() {
     countQtySince("out", startMonth),
   ]);
 
+  const [periodInRow, periodOutRow, prevPeriodInRow, prevPeriodOutRow] = await Promise.all([
+    countQtySince("in", startPeriod),
+    countQtySince("out", startPeriod),
+    countQtySince("in", startPrevPeriod),
+    countQtySince("out", startPrevPeriod),
+  ]);
+
+  const totalStockChange = prevPeriodInRow.qty - prevPeriodOutRow.qty !== 0
+    ? ((periodInRow.qty - periodOutRow.qty) - (prevPeriodInRow.qty - prevPeriodOutRow.qty)) /
+      Math.abs(prevPeriodInRow.qty - prevPeriodOutRow.qty) * 100
+    : 0;
+  const monthInChange = prevPeriodInRow.qty !== 0
+    ? (periodInRow.qty - prevPeriodInRow.qty) / prevPeriodInRow.qty * 100
+    : 0;
+  const monthOutChange = prevPeriodOutRow.qty !== 0
+    ? (periodOutRow.qty - prevPeriodOutRow.qty) / prevPeriodOutRow.qty * 100
+    : 0;
+
   const seriesRows = await db
     .select({
       day: sql<string>`to_char(${transactions.date}, 'YYYY-MM-DD')`,
@@ -89,7 +121,7 @@ async function computeStats() {
     })
     .from(transactions)
     .innerJoin(transactionItems, eq(transactionItems.transactionId, transactions.id))
-    .where(and(isNull(transactions.voidedAt), gte(transactions.date, formatBusinessDate(start14))))
+    .where(and(isNull(transactions.voidedAt), gte(transactions.date, formatBusinessDate(startPeriod))))
     .groupBy(sql`to_char(${transactions.date}, 'YYYY-MM-DD')`, transactions.type)
     .orderBy(sql`to_char(${transactions.date}, 'YYYY-MM-DD')`);
 
@@ -101,9 +133,9 @@ async function computeStats() {
     series.set(row.day, entry);
   }
   const chart: { day: string; label: string; in: number; out: number }[] = [];
-  for (let i = 0; i < 14; i++) {
-    const d = new Date(start14);
-    d.setDate(start14.getDate() + i);
+  for (let i = 0; i < periodDays; i++) {
+    const d = new Date(startPeriod);
+    d.setDate(startPeriod.getDate() + i);
     const key = dateKey(d);
     const entry = series.get(key) ?? { in: 0, out: 0 };
     chart.push({
@@ -132,7 +164,6 @@ async function computeStats() {
 
   const recent = await listTransactions({ limit: 8 });
 
-  // Top mitra 30 hari: pelanggan (out) dan supplier (in)
   const topBy = async (type: "in" | "out") =>
     (
       await db
@@ -154,6 +185,43 @@ async function computeStats() {
 
   const [topCustomers, topSuppliers] = await Promise.all([topBy("out"), topBy("in")]);
 
+  const topItems = await db
+    .select({
+      id: items.id,
+      name: items.name,
+      sku: items.sku,
+      qty: sql<number>`coalesce(sum(${transactionItems.qty}), 0)::int`,
+      movements: count(transactions.id),
+    })
+    .from(transactionItems)
+    .innerJoin(transactions, eq(transactionItems.transactionId, transactions.id))
+    .innerJoin(items, eq(transactionItems.itemId, items.id))
+    .where(and(isNull(transactions.voidedAt), gte(transactions.date, formatBusinessDate(startPeriod))))
+    .groupBy(items.id)
+    .orderBy(desc(sql`count(${transactions.id})`), desc(sql`sum(${transactionItems.qty})`))
+    .limit(10);
+
+  const start180 = new Date(startToday);
+  start180.setDate(startToday.getDate() - 180);
+  const deadStock = await db
+    .select({
+      id: items.id,
+      name: items.name,
+      sku: items.sku,
+      lastMovement: sql<string | null>`max(${transactions.date})`,
+    })
+    .from(items)
+    .leftJoin(transactionItems, eq(transactionItems.itemId, items.id))
+    .leftJoin(transactions, and(
+      eq(transactionItems.transactionId, transactions.id),
+      isNull(transactions.voidedAt),
+    ))
+    .where(eq(items.isActive, true))
+    .groupBy(items.id)
+    .having(sql`max(${transactions.date}) IS NULL OR max(${transactions.date}) < ${formatBusinessDate(start180)}`)
+    .orderBy(sql`coalesce(max(${transactions.date}), '1970-01-01') asc`)
+    .limit(10);
+
   return {
     totalItems: totalItemsRow?.n ?? 0,
     totalStock: stockRow?.total ?? 0,
@@ -162,19 +230,48 @@ async function computeStats() {
     todayOut: todayOutRow,
     monthIn: monthInRow,
     monthOut: monthOutRow,
+    periodIn: periodInRow,
+    periodOut: periodOutRow,
     topCustomers,
     topSuppliers,
     chart,
     lowStock,
     recent,
+    period: { from: formatBusinessDate(startPeriod), to: formatBusinessDate(startToday) },
+    trend: {
+      totalStock: Math.round(totalStockChange * 10) / 10,
+      monthIn: Math.round(monthInChange * 10) / 10,
+      monthOut: Math.round(monthOutChange * 10) / 10,
+    },
+    topItems: topItems.map((r) => ({
+      id: r.id,
+      name: r.name,
+      sku: r.sku,
+      qty: r.qty,
+      movements: r.movements,
+    })),
+    deadStock: deadStock.map((r) => ({
+      id: r.id,
+      name: r.name,
+      sku: r.sku,
+      lastMovement: r.lastMovement,
+      daysSince: r.lastMovement
+        ? Math.floor((Date.now() - new Date(r.lastMovement).getTime()) / 86400000)
+        : 999,
+    })),
     asOf: new Date(),
   };
 }
 
 export type Stats = Awaited<ReturnType<typeof computeStats>>;
 
-export async function getStats(): Promise<Stats> {
-  const cached = await Bun.redis.get(STATS_CACHE_KEY);
+function statsCacheKey(period: Period): string {
+  return `${STATS_CACHE_KEY}:${period}`;
+}
+
+export async function getStats(period: Period = "14d"): Promise<Stats> {
+  const key = statsCacheKey(period);
+  const cached = await Bun.redis.get(key);
   if (cached) {
     try {
       return JSON.parse(cached) as Stats;
@@ -182,8 +279,8 @@ export async function getStats(): Promise<Stats> {
       /* re-compute */
     }
   }
-  const stats = await computeStats();
-  await Bun.redis.set(STATS_CACHE_KEY, JSON.stringify(stats), "EX", STATS_TTL).catch(
+  const stats = await computeStats(period);
+  await Bun.redis.set(key, JSON.stringify(stats), "EX", STATS_TTL).catch(
     () => {},
   );
   return stats;
