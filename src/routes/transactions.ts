@@ -9,6 +9,7 @@ import {
   listTransactions,
   voidTransaction,
 } from "../transactions.service";
+import { getLocationOptions, resolveLocations } from "../item-mappings.service";
 import { xlsxAttachment } from "../xlsx";
 import { formatBusinessDate, parseBusinessDate } from "../dates";
 import { cursorLessThan, decodeCursor, encodeCursor } from "../cursor";
@@ -160,6 +161,65 @@ export const transactionRoutes = new Elysia({ prefix: "/api/transactions" }).use
       return { ...result, replay: false };
     },
     { body: createSchema },
+  )
+  .get(
+    "/locations",
+    async ({ user }) => {
+      requirePerm(user, "transactions:view");
+      return getLocationOptions();
+    },
+  )
+  .post(
+    "/quick-out",
+    async ({ body, set, headers, user }) => {
+      requirePerm(user, "transactions:create");
+      const idempotencyKey = headers["idempotency-key"] ?? null;
+
+      const resolved = await resolveLocations(body.items);
+
+      const result = await createTransaction({
+        type: "out",
+        date: body.date,
+        note: body.note ?? null,
+        partnerId: body.partnerId ?? null,
+        lines: resolved,
+        idempotencyKey,
+      });
+
+      if (result.replay) {
+        set.status = 200;
+        set.headers["Idempotent-Replay"] = "true";
+        return { ...result, replay: true };
+      }
+
+      set.status = 201;
+      await logAudit(user, "transactions.quick-out", "transactions", result.transactionId, {
+        number: result.number,
+        itemCount: body.items.length,
+      });
+      await publishEvent({
+        kind: "transaction:created",
+        data: { id: result.transactionId, number: result.number, type: "out" },
+      });
+      return { ...result, replay: false };
+    },
+    {
+      body: t.Object({
+        date: t.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" }),
+        note: t.Optional(t.Nullable(t.String({ maxLength: 500 }))),
+        partnerId: t.Optional(t.Nullable(t.String())),
+        items: t.Array(
+          t.Object({
+            line: t.String(),
+            column: t.Integer({ minValue: 1 }),
+            row: t.Integer({ minValue: 1 }),
+            position: t.Union([t.Literal("top"), t.Literal("bottom")]),
+            qty: t.Integer({ minValue: 1 }),
+          }),
+          { minItems: 1 },
+        ),
+      }),
+    },
   )
   .post(
     "/:id/void",

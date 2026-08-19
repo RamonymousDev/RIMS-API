@@ -29,6 +29,13 @@
       "when": 1786546161127,
       "tag": "0003_solid_lady_deathstrike",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787072314324,
+      "tag": "0004_orange_oracle",
+      "breakpoints": true
     }
   ]
 }

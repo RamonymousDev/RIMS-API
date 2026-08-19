@@ -12,6 +12,7 @@ import { statsRoutes } from "./routes/stats";
 import { subscribeStatsInvalidation } from "./stats.service";
 import { feedRoutes } from "./routes/feed";
 import { partnerRoutes } from "./routes/partners";
+import { itemMappingRoutes } from "./routes/item-mappings";
 import { auditRoutes, userRoutes } from "./routes/users";
 
 await ensureExtensions();
@@ -81,6 +82,7 @@ const app = new Elysia()
   .use(statsRoutes)
   .use(feedRoutes)
   .use(partnerRoutes)
+  .use(itemMappingRoutes)
   .use(userRoutes)
   .use(auditRoutes);
 

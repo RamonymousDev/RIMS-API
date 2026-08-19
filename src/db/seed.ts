@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { db } from "./client";
-import { businessPartners, items } from "./schema";
+import { businessPartners, items, itemMappings } from "./schema";
 import { createTransaction } from "../transactions.service";
 import { ensureAdminUser } from "../auth";
 
@@ -40,6 +40,27 @@ const SAMPLE: {
   { sku: "HS-012", name: "Headset USB", model: "H570", variant: "Mono", unit: "pcs", minStock: 6 },
 ];
 
+const MAPPINGS: { sku: string; line: string; column: number; row: number; position: "top" | "bottom" }[] = [
+  // Line A — 2 kolom × 3 baris, semua 12 item
+  { sku: "LAP-001", line: "A", column: 1, row: 1, position: "top" },
+  { sku: "MON-002", line: "A", column: 1, row: 1, position: "bottom" },
+  { sku: "MOU-003", line: "A", column: 1, row: 2, position: "top" },
+  { sku: "KBD-004", line: "A", column: 1, row: 2, position: "bottom" },
+  { sku: "RAM-005", line: "A", column: 1, row: 3, position: "top" },
+  { sku: "SSD-006", line: "A", column: 1, row: 3, position: "bottom" },
+  { sku: "PRN-007", line: "A", column: 2, row: 1, position: "top" },
+  { sku: "AP-008", line: "A", column: 2, row: 1, position: "bottom" },
+  { sku: "KBT-009", line: "A", column: 2, row: 2, position: "top" },
+  { sku: "SWT-010", line: "A", column: 2, row: 2, position: "bottom" },
+  { sku: "UPS-011", line: "A", column: 2, row: 3, position: "top" },
+  { sku: "HS-012", line: "A", column: 2, row: 3, position: "bottom" },
+  // Line B — 2 kolom × 2 baris, sebagian kosong
+  { sku: "LAP-001", line: "B", column: 1, row: 1, position: "top" },
+  { sku: "MOU-003", line: "B", column: 1, row: 1, position: "bottom" },
+  { sku: "RAM-005", line: "B", column: 1, row: 2, position: "top" },
+  { sku: "SSD-006", line: "B", column: 2, row: 1, position: "top" },
+];
+
 const DAYS = 14;
 const now = Date.now();
 
@@ -56,7 +77,7 @@ function dateStr(d: Date): string {
 
 async function reset() {
   await db.execute(
-    sql`TRUNCATE TABLE audit_logs, transaction_items, transactions, items, business_partners, users, counters RESTART IDENTITY CASCADE`,
+    sql`TRUNCATE TABLE audit_logs, transaction_items, transactions, item_mappings, items, business_partners, users, counters RESTART IDENTITY CASCADE`,
   );
   console.log("[seed] data lama dibersihkan.");
 }
@@ -102,6 +123,28 @@ async function seedPartners(): Promise<{ customerIds: string[]; supplierIds: str
   }
   console.log(`[seed] ${PARTNERS.length} mitra dibuat.`);
   return { customerIds, supplierIds };
+}
+
+async function seedMappings(itemIds: string[]) {
+  const skuToId = new Map<string, string>();
+  for (let i = 0; i < SAMPLE.length; i++) {
+    skuToId.set(SAMPLE[i]!.sku, itemIds[i]!);
+  }
+
+  let count = 0;
+  for (const m of MAPPINGS) {
+    const itemId = skuToId.get(m.sku);
+    if (!itemId) continue;
+    await db.insert(itemMappings).values({
+      itemId,
+      line: m.line,
+      column: m.column,
+      row: m.row,
+      position: m.position,
+    });
+    count++;
+  }
+  console.log(`[seed] ${count} mapping lokasi dibuat.`);
 }
 
 async function seedTransactions(ids: string[], partners: { customerIds: string[]; supplierIds: string[] }) {
@@ -158,5 +201,6 @@ await reset();
 await ensureAdminUser();
 const itemIds = await seedItems();
 const partnerIds = await seedPartners();
+await seedMappings(itemIds);
 await seedTransactions(itemIds, partnerIds);
 process.exit(0);

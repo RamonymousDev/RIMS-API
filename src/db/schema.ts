@@ -15,6 +15,7 @@ import {
 
 export const transactionType = pgEnum("transaction_type", ["in", "out"]);
 export const partnerType = pgEnum("partner_type", ["customer", "supplier", "both"]);
+export const positionType = pgEnum("position_type", ["top", "bottom"]);
 
 export const businessPartners = pgTable(
   "business_partners",
@@ -140,7 +141,28 @@ export const counters = pgTable("counters", {
   value: integer("value").notNull().default(0),
 });
 
+export const itemMappings = pgTable(
+  "item_mappings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    itemId: uuid("item_id")
+      .notNull()
+      .references(() => items.id, { onDelete: "cascade" }),
+    line: text("line").notNull(),
+    column: integer("column").notNull(),
+    row: integer("row").notNull(),
+    position: positionType("position").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("item_mappings_location_idx").on(t.line, t.column, t.row, t.position),
+    index("item_mappings_item_idx").on(t.itemId),
+  ],
+);
+
 export type Item = typeof items.$inferSelect;
 export type NewItem = typeof items.$inferInsert;
 export type Transaction = typeof transactions.$inferSelect;
 export type TransactionItem = typeof transactionItems.$inferSelect;
+export type ItemMapping = typeof itemMappings.$inferSelect;
