@@ -2,7 +2,7 @@ import { and, asc, count, eq, ilike, or, sql } from "drizzle-orm";
 import { Elysia, t } from "elysia";
 import { db } from "../db/client";
 import { businessPartners, transactions } from "../db/schema";
-import { ApiError } from "../http";
+import { ApiError, assertUuid } from "../http";
 import { authGuard, requirePerm } from "../security";
 import { logAudit } from "../audit";
 import { publishEvent } from "../redis";
@@ -156,6 +156,7 @@ export const partnerRoutes = new Elysia({ prefix: "/api/partners" }).use(authGua
     "/:id",
     async ({ params, body, user }) => {
       requirePerm(user, "partners:edit");
+      assertUuid(params.id, "Mitra tidak ditemukan");
       try {
         const [updated] = await db
           .update(businessPartners)
@@ -182,6 +183,7 @@ export const partnerRoutes = new Elysia({ prefix: "/api/partners" }).use(authGua
     "/:id",
     async ({ params, user }) => {
       requirePerm(user, "partners:delete");
+      assertUuid(params.id, "Mitra tidak ditemukan");
       const [hasHistory] = await db
         .select({ n: count() })
         .from(transactions)
@@ -204,6 +206,7 @@ export const partnerRoutes = new Elysia({ prefix: "/api/partners" }).use(authGua
     "/:id",
     async ({ params, user }) => {
       requirePerm(user, "partners:view");
+      assertUuid(params.id, "Mitra tidak ditemukan");
       const [partner] = await db
         .select()
         .from(businessPartners)

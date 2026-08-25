@@ -2,7 +2,7 @@ import { and, eq, gte, ilike, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { db } from "./db/client";
 import { businessPartners, counters, items, transactionItems, transactions } from "./db/schema";
-import { ApiError } from "./http";
+import { ApiError, UUID_RE } from "./http";
 import { formatBusinessDate, isFuture, parseBusinessDate } from "./dates";
 
 type Tx = Parameters<Parameters<PostgresJsDatabase["transaction"]>[0]>[0];
@@ -63,6 +63,14 @@ export async function createTransaction(input: TransactionInput): Promise<Create
 
   if (rawLines.length === 0) {
     throw new ApiError(400, "Nota harus memiliki minimal satu barang");
+  }
+
+  // input UUID yang tidak valid akan melempar error DB (500) — tolak lebih awal
+  if (rawLines.some((l) => !UUID_RE.test(l.itemId))) {
+    throw new ApiError(400, "Ada barang yang tidak ditemukan");
+  }
+  if (partnerId && !UUID_RE.test(partnerId)) {
+    throw new ApiError(400, "Mitra tidak ditemukan");
   }
 
   const parsedDate = parseBusinessDate(date);
@@ -190,8 +198,6 @@ export async function createTransaction(input: TransactionInput): Promise<Create
     throw err;
   }
 }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function resolveTransactionId(ref: string): Promise<string | null> {
   const isUuid = UUID_RE.test(ref);

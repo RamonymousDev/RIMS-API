@@ -83,6 +83,9 @@ export type LocationOption = {
   itemId: string;
   itemName: string;
   itemSku: string;
+  minStock: number;
+  stock: number;
+  unit: string;
 };
 
 export async function getLocationOptions(): Promise<{
@@ -98,6 +101,9 @@ export async function getLocationOptions(): Promise<{
       itemId: items.id,
       itemName: items.name,
       itemSku: items.sku,
+      minStock: items.minStock,
+      stock: items.stock,
+      unit: items.unit,
     })
     .from(itemMappings)
     .innerJoin(items, eq(itemMappings.itemId, items.id))
@@ -116,6 +122,9 @@ export async function getLocationOptions(): Promise<{
       itemId: r.itemId,
       itemName: r.itemName,
       itemSku: r.itemSku,
+      minStock: r.minStock,
+      stock: r.stock,
+      unit: r.unit,
     })),
   };
 }

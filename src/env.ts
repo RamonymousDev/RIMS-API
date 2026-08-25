@@ -9,6 +9,9 @@ const envSchema = v.object({
   ADMIN_PASSWORD: v.optional(v.string(), "change-me"),
   COOKIE_DOMAIN: v.optional(v.string(), ""),
   WEB_ORIGIN: v.optional(v.string(), "http://localhost:5173"),
+  // "true" hanya jika API di belakang reverse proxy terpercaya yang menyetel
+  // X-Forwarded-For — jangan pernah true saat API reachable langsung.
+  TRUST_PROXY: v.optional(v.picklist(["true", "false"]), "false"),
 });
 
 const parsed = v.parse(envSchema, process.env);
@@ -20,7 +23,15 @@ if (password === "change-me" || password.length < 12) {
   );
 }
 
+if (parsed.NODE_ENV === "production" && parsed.WEB_ORIGIN === "http://localhost:5173") {
+  console.warn(
+    "[env] WARN: WEB_ORIGIN masih default (http://localhost:5173) di mode produksi. " +
+    "Set WEB_ORIGIN ke URL domain produksi untuk membatasi CORS dengan benar.",
+  );
+}
+
 export const env = {
   ...parsed,
   isProd: parsed.NODE_ENV === "production",
+  trustProxy: parsed.TRUST_PROXY === "true",
 };

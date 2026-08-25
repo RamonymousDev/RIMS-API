@@ -5,14 +5,35 @@ import { subscribeFeed } from "../redis";
 
 type Controller = ReadableStreamDefaultController<Uint8Array>;
 
-const listeners = new Set<Controller>();
+// kind event → permission minimum untuk menerima event tsb
+const KIND_PERM: Record<string, string> = {
+  "transaction:created": "transactions:view",
+  "transaction:voided": "transactions:view",
+  "item:updated": "items:view",
+  "item:deleted": "items:view",
+  "partner:updated": "partners:view",
+  "partner:deleted": "partners:view",
+};
+
+type Listener = { controller: Controller; perms: Record<string, boolean> };
+
+const listeners = new Set<Listener>();
 
 subscribeFeed((message) => {
-  for (const controller of listeners) {
+  let kind = "";
+  try {
+    kind = (JSON.parse(message) as { kind?: string }).kind ?? "";
+  } catch {
+    // pesan non-JSON — abaikan filter, jangan broadcast
+    return;
+  }
+  const requiredPerm = KIND_PERM[kind];
+  for (const listener of listeners) {
+    if (requiredPerm && listener.perms?.[requiredPerm] !== true) continue;
     try {
-      controller.enqueue(new TextEncoder().encode(`data: ${message}\n\n`));
+      listener.controller.enqueue(new TextEncoder().encode(`data: ${message}\n\n`));
     } catch {
-      listeners.delete(controller);
+      listeners.delete(listener);
     }
   }
 });
@@ -24,11 +45,14 @@ export const feedRoutes = new Elysia({ prefix: "/api" }).use(authGuard()).get(
 
     let ping: ReturnType<typeof setInterval> | null = null;
     let current: Controller | null = null;
+    // snapshot permission saat koneksi dibuka; perubahan permission berlaku saat reconnect
+    const listener: Listener = { controller: null!, perms: user.permissions ?? {} };
 
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         current = controller;
-        listeners.add(controller);
+        listener.controller = controller;
+        listeners.add(listener);
         controller.enqueue(new TextEncoder().encode(`retry: 3000\n\n`));
         ping = setInterval(() => {
           if (current) {
@@ -41,7 +65,7 @@ export const feedRoutes = new Elysia({ prefix: "/api" }).use(authGuard()).get(
         }, 15_000);
       },
       cancel() {
-        if (current) listeners.delete(current);
+        if (current) listeners.delete(listener);
         if (ping) clearInterval(ping);
       },
     });

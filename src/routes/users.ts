@@ -2,7 +2,7 @@ import { and, desc, eq, gte, ilike, lt, or, sql } from "drizzle-orm";
 import { Elysia, t } from "elysia";
 import { db } from "../db/client";
 import { auditLogs, users } from "../db/schema";
-import { ApiError } from "../http";
+import { ApiError, assertUuid } from "../http";
 import { authGuard, requirePerm } from "../security";
 import { destroySession, destroyUserSessions, listUserSessions, sessionBelongsToUser } from "../auth";
 import { logAudit } from "../audit";
@@ -85,12 +85,22 @@ export const userRoutes = new Elysia({ prefix: "/api/users" }).use(authGuard())
     "/:id",
     async ({ params, body, user }) => {
       requirePerm(user, "users:manage");
+      assertUuid(params.id, "Pengguna tidak ditemukan");
       const [target] = await db
-        .select({ id: users.id, username: users.username })
+        .select({ id: users.id, username: users.username, isBootstrap: users.isBootstrap })
         .from(users)
         .where(eq(users.id, params.id))
         .limit(1);
       if (!target) throw new ApiError(404, "Pengguna tidak ditemukan");
+
+      // admin utama hanya bisa mengubah password/permission miliknya sendiri
+      if (
+        target.isBootstrap &&
+        user.id !== target.id &&
+        (body.permissions !== undefined || body.password !== undefined)
+      ) {
+        throw new ApiError(403, "Admin utama tidak bisa diubah oleh pengguna lain");
+      }
 
       if (
         body.permissions &&
@@ -134,6 +144,7 @@ export const userRoutes = new Elysia({ prefix: "/api/users" }).use(authGuard())
     "/:id",
     async ({ params, user }) => {
       requirePerm(user, "users:manage");
+      assertUuid(params.id, "Pengguna tidak ditemukan");
       if (user.id === params.id) throw new ApiError(400, "Tidak bisa menghapus akun sendiri");
       const [target] = await db
         .select({ id: users.id, username: users.username, isBootstrap: users.isBootstrap })
@@ -153,6 +164,7 @@ export const userRoutes = new Elysia({ prefix: "/api/users" }).use(authGuard())
     "/:id/sessions",
     async ({ params, user, sessionToken }) => {
       requirePerm(user, "users:view");
+      assertUuid(params.id, "Pengguna tidak ditemukan");
       const [target] = await db
         .select({ id: users.id, username: users.username })
         .from(users)
@@ -162,7 +174,7 @@ export const userRoutes = new Elysia({ prefix: "/api/users" }).use(authGuard())
       const sessions = await listUserSessions(params.id);
       return {
         data: sessions.map((s) => ({
-          token: s.token,
+          tokenHint: s.token.slice(0, 8) + "…",
           username: s.username,
           createdAt: s.createdAt,
           ttlSeconds: s.ttlSeconds,
@@ -176,6 +188,7 @@ export const userRoutes = new Elysia({ prefix: "/api/users" }).use(authGuard())
     "/:id/sessions/:token",
     async ({ params, user }) => {
       requirePerm(user, "users:manage");
+      assertUuid(params.id, "Pengguna tidak ditemukan");
       const [target] = await db
         .select({ id: users.id, username: users.username })
         .from(users)

@@ -2,7 +2,7 @@ import { asc, eq } from "drizzle-orm";
 import { Elysia, t } from "elysia";
 import { db } from "../db/client";
 import { items, itemMappings } from "../db/schema";
-import { ApiError } from "../http";
+import { ApiError, assertUuid } from "../http";
 import { publishEvent } from "../redis";
 import { authGuard, requirePerm } from "../security";
 import { logAudit } from "../audit";
@@ -54,6 +54,7 @@ export const itemMappingRoutes = new Elysia({ prefix: "/api/item-mappings" })
     "/",
     async ({ body, set, user }) => {
       requirePerm(user, "items:edit");
+      assertUuid(body.itemId, "Barang tidak ditemukan");
 
       const [item] = await db
         .select({ id: items.id })
@@ -97,6 +98,7 @@ export const itemMappingRoutes = new Elysia({ prefix: "/api/item-mappings" })
     "/:id",
     async ({ params, user }) => {
       requirePerm(user, "items:edit");
+      assertUuid(params.id, "Mapping tidak ditemukan");
       const [deleted] = await db
         .delete(itemMappings)
         .where(eq(itemMappings.id, params.id))

@@ -2,7 +2,7 @@ import { and, asc, count, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { Elysia, t } from "elysia";
 import { db } from "../db/client";
 import { businessPartners, items, transactionItems, transactions } from "../db/schema";
-import { ApiError } from "../http";
+import { ApiError, assertUuid } from "../http";
 import { publishEvent } from "../redis";
 import { authGuard, requirePerm } from "../security";
 import { logAudit } from "../audit";
@@ -277,6 +277,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
     "/:id",
     async ({ params, body, set, user }) => {
       requirePerm(user, "items:edit");
+      assertUuid(params.id, "Barang tidak ditemukan");
       try {
         const [updated] = await db
           .update(items)
@@ -301,6 +302,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
     "/:id",
     async ({ params, set, user }) => {
       requirePerm(user, "items:delete");
+      assertUuid(params.id, "Barang tidak ditemukan");
       const [hasHistory] = await db
         .select({ n: count() })
         .from(transactionItems)
@@ -323,6 +325,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
     "/:id/transactions",
     async ({ params, user }) => {
       requirePerm(user, "items:view");
+      assertUuid(params.id, "Barang tidak ditemukan");
       const [item] = await db
         .select({ id: items.id, name: items.name, sku: items.sku, stock: items.stock })
         .from(items)
@@ -372,6 +375,7 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
     "/:id",
     async ({ params, user }) => {
       requirePerm(user, "items:view");
+      assertUuid(params.id, "Barang tidak ditemukan");
       const [item] = await db.select().from(items).where(eq(items.id, params.id)).limit(1);
       if (!item) throw new ApiError(404, "Barang tidak ditemukan");
       return { item };

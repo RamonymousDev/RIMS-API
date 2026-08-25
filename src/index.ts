@@ -5,6 +5,7 @@ import { ensureExtensions } from "./db/client";
 import { ApiError } from "./http";
 import { securityHeadersPlugin } from "./security";
 import { ensureAdminUser } from "./auth";
+import { startAuditRetention } from "./audit";
 import { authRoutes } from "./routes/auth";
 import { itemRoutes } from "./routes/items";
 import { transactionRoutes } from "./routes/transactions";
@@ -14,10 +15,15 @@ import { feedRoutes } from "./routes/feed";
 import { partnerRoutes } from "./routes/partners";
 import { itemMappingRoutes } from "./routes/item-mappings";
 import { auditRoutes, userRoutes } from "./routes/users";
+import { raiRoutes } from "./routes/rai";
 
 await ensureExtensions();
 await ensureAdminUser();
 subscribeStatsInvalidation();
+startAuditRetention();
+
+// batas global Content-Length (upload import XLSX 10MB + overhead multipart)
+const MAX_BODY_BYTES = 12 * 1024 * 1024;
 
 const app = new Elysia()
   .use(
@@ -44,6 +50,13 @@ const app = new Elysia()
   .onBeforeHandle(({ request, set }) => {
     const method = request.method;
     if (method === "GET" || method === "HEAD" || method === "OPTIONS") return;
+
+    const contentLength = Number(request.headers.get("content-length") ?? "0");
+    if (contentLength > MAX_BODY_BYTES) {
+      set.status = 413;
+      return { error: "Ukuran permintaan terlalu besar" };
+    }
+
     const csrf = request.headers.get("X-Requested-With");
     const bearer = request.headers.get("Authorization");
     if (!csrf && !bearer) {
@@ -84,7 +97,8 @@ const app = new Elysia()
   .use(partnerRoutes)
   .use(itemMappingRoutes)
   .use(userRoutes)
-  .use(auditRoutes);
+  .use(auditRoutes)
+  .use(raiRoutes);
 
 const port = Number(env.PORT);
 

@@ -145,10 +145,19 @@ export function cookieFor(token: string, maxAge: number): string {
     `Max-Age=${maxAge}`,
   ];
   if (env.isProd) parts.push("Secure");
-  if (env.COOKIE_DOMAIN) parts.push(`Domain=${env.COOKIE_DOMAIN}`);
+  // __Host- prefix melarang atribut Domain — jangan tambahkan di prod
+  if (env.COOKIE_DOMAIN && !env.isProd) parts.push(`Domain=${env.COOKIE_DOMAIN}`);
   return parts.join("; ");
 }
 
 export function clearCookie(): string {
-  return `${COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`;
+  const parts = [
+    `${COOKIE_NAME}=`,
+    "HttpOnly",
+    "Path=/",
+    "SameSite=Lax",
+    "Max-Age=0",
+  ];
+  if (env.isProd) parts.push("Secure");
+  return parts.join("; ");
 }
