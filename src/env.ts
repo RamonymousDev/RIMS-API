@@ -12,6 +12,9 @@ const envSchema = v.object({
   // "true" hanya jika API di belakang reverse proxy terpercaya yang menyetel
   // X-Forwarded-For — jangan pernah true saat API reachable langsung.
   TRUST_PROXY: v.optional(v.picklist(["true", "false"]), "false"),
+  // Token akses untuk endpoint peta gudang public (read-only). Kosong =
+  // endpoint dinonaktifkan (401).
+  PUBLIC_MAP_TOKEN: v.optional(v.string(), ""),
 });
 
 const parsed = v.parse(envSchema, process.env);

@@ -16,6 +16,7 @@ import { partnerRoutes } from "./routes/partners";
 import { itemMappingRoutes } from "./routes/item-mappings";
 import { auditRoutes, userRoutes } from "./routes/users";
 import { raiRoutes } from "./routes/rai";
+import { publicRoutes } from "./routes/public";
 
 await ensureExtensions();
 await ensureAdminUser();
@@ -98,7 +99,8 @@ const app = new Elysia()
   .use(itemMappingRoutes)
   .use(userRoutes)
   .use(auditRoutes)
-  .use(raiRoutes);
+  .use(raiRoutes)
+  .use(publicRoutes);
 
 const port = Number(env.PORT);
 
