@@ -1,6 +1,6 @@
 # Deploy RIMS API — production (Bun + Postgres + Redis, tanpa Docker)
 
-Panduan deploy API di server Linux dengan **Bun, Postgres, dan Redis** (tanpa Docker). Web statis di-serve Apache — lihat `web/DEPLOYMENT.md`.
+Panduan deploy API di server Linux dengan **Bun, Postgres, dan Redis** (tanpa Docker). Web statis (React) di-serve Apache — lihat `web/DEPLOYMENT.md`; versi SvelteKit SSR/web v2 memakai service node — lihat `web_v2/DEPLOYMENT.md`.
 
 ## Prerequisite
 
@@ -65,6 +65,7 @@ bun run db:migrate
 - [ ] Realtime: buka 2 tab → transaksi di satu tab tampil di tab lain
 - [ ] Backup `pg_dump` diuji restore minimal sekali
 - [ ] `.env` production: `COOKIE_DOMAIN` kosong, `WEB_ORIGIN` = https domain, password admin kuat
+- [ ] (opsional peta gudang) `PUBLIC_MAP_TOKEN` terisi & cocok dengan web v2; cek `GET /api/public/warehouse-map?token=…` → 200
 
 ## 3. Konfigurasi `.env`
 
@@ -80,6 +81,7 @@ Buka `/var/www/rims/api/.env`:
 | `ADMIN_PASSWORD` | password kuat (min. 12) | |
 | `COOKIE_DOMAIN` | **biarkan kosong** | ⚠️ lihat cookie `__Host-` di bawah |
 | `WEB_ORIGIN` | `https://rims.devmoon.net` | origin publik web |
+| `PUBLIC_MAP_TOKEN` | token acak kuat | endpoint peta gudang public — lihat di bawah; kosong = endpoint mati (401) |
 
 ### Cookie `__Host-` (penting!)
 
@@ -90,6 +92,22 @@ Saat `NODE_ENV=production`, cookie sesi bernama **`__Host-rims_session`**. Prefi
 - **tanpa atribut `Domain`** → karena itu `COOKIE_DOMAIN` harus **kosong**
 
 Jika `COOKIE_DOMAIN` diisi, browser menolak cookie dan login tidak pernah "melekat".
+
+### Endpoint peta gudang public (opsional)
+
+Web v2 punya halaman `/peta-stok` yang menampilkan **peta stok gudang di TV/PJ tanpa login**. Data diambil dari endpoint read-only yang dilindungi token sederhana:
+
+```
+GET /api/public/warehouse-map?token=<PUBLIC_MAP_TOKEN>
+```
+
+- Aktifkan dengan mengisi `PUBLIC_MAP_TOKEN` di `.env` (token acak kuat, min. cukup panjang). Kosong → endpoint menolak dengan `401 {"error":"Peta gudang belum diaktifkan","code":"public:disabled"}`.
+- Setiap request wajib membawa `?token=` yang cocok; salah → `401 public:unauthorized`.
+- **Read-only & tersanitasi**: hanya mengekspos lokasi rak + stok + SKU/nama + unit + minStock. `itemId` internal ditutupi agar tidak bocor; **tidak ada** data transaksi, harga, atau pengguna.
+- Endpoint ini **berfungsi tanpa cookie/URL session** — lewat Apache proxy `/api` yang sama, tidak perlu vhost terpisah.
+- Nilai `PUBLIC_MAP_TOKEN` di API harus **sama persis** dengan `PUBLIC_MAP_TOKEN` di `.env` web v2 (lihat `web_v2/DEPLOYMENT.md`).
+
+> ⚠️ Karena tidak ada mekanisme expiry/rotasi otomatis dan token lewat query string, jangan isi `PUBLIC_MAP_TOKEN` di URL bookmark/HTTPS yang log-able tanpa memang berniat mempublikasikan peta; ganti token berkala bila perlu.
 
 ## 4. Systemd service
 
