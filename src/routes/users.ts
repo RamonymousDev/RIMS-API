@@ -174,6 +174,7 @@ export const userRoutes = new Elysia({ prefix: "/api/users" }).use(authGuard())
       const sessions = await listUserSessions(params.id);
       return {
         data: sessions.map((s) => ({
+          token: s.token,
           tokenHint: s.token.slice(0, 8) + "…",
           username: s.username,
           createdAt: s.createdAt,
