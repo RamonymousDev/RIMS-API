@@ -332,11 +332,14 @@ export type TransactionListFilters = {
   partnerId?: string;
   from?: Date;
   to?: Date;
+  voided?: boolean | null;
 };
 
 function transactionFilters(opts: TransactionListFilters) {
   const conditions = [];
   if (opts.type) conditions.push(eq(transactions.type, opts.type));
+  if (opts.voided === true) conditions.push(sql`${transactions.voidedAt} IS NOT NULL`);
+  else if (opts.voided === false) conditions.push(sql`${transactions.voidedAt} IS NULL`);
   if (opts.search) {
     const q = `%${opts.search.trim()}%`;
     conditions.push(or(ilike(transactions.number, q), ilike(transactions.note, q)));

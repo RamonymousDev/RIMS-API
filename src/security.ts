@@ -8,6 +8,8 @@ import { eq } from "drizzle-orm";
 
 const RATE_PREFIX = "rims:rl:login:";
 const RATE_USER_PREFIX = "rims:rl:login-user:";
+const RATE_HEAVY_PREFIX = "rims:rl:heavy:";
+const RATE_EXPORT_PREFIX = "rims:rl:export:";
 
 export type AuthUser = {
   id: string;
@@ -74,6 +76,22 @@ export async function checkUsernameRate(username: string): Promise<boolean> {
 export async function clearLoginRates(ip: string, username: string) {
   const u = username.trim().toLowerCase();
   await Bun.redis.del(`${RATE_PREFIX}${ip}:${u}`, `${RATE_USER_PREFIX}${u}`);
+}
+
+async function genericRateLimit(prefix: string, ip: string, max: number, seconds: number): Promise<boolean> {
+  const key = `${prefix}${ip}`;
+  const count = await Bun.redis.incr(key);
+  if (count === 1) await Bun.redis.expire(key, seconds);
+  else if ((await Bun.redis.ttl(key)) < 0) await Bun.redis.expire(key, seconds);
+  return count <= max;
+}
+
+export async function checkHeavyRate(ip: string): Promise<boolean> {
+  return genericRateLimit(RATE_HEAVY_PREFIX, ip, 60, 60);
+}
+
+export async function checkExportRate(ip: string): Promise<boolean> {
+  return genericRateLimit(RATE_EXPORT_PREFIX, ip, 15, 60);
 }
 
 export function securityHeadersPlugin() {

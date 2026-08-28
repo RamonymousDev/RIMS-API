@@ -3,17 +3,13 @@ import * as v from "valibot";
 const envSchema = v.object({
   PORT: v.optional(v.pipe(v.string(), v.transform(Number)), "3001"),
   NODE_ENV: v.optional(v.picklist(["development", "production", "test"]), "development"),
-  DATABASE_URL: v.optional(v.string(), "postgres://postgres:postgres@127.0.0.1:5432/rims"),
-  REDIS_URL: v.optional(v.string(), "redis://127.0.0.1:6379"),
+  DATABASE_URL: v.string(),
+  REDIS_URL: v.string(),
   ADMIN_USERNAME: v.optional(v.string(), "admin"),
   ADMIN_PASSWORD: v.optional(v.string(), "change-me"),
   COOKIE_DOMAIN: v.optional(v.string(), ""),
   WEB_ORIGIN: v.optional(v.string(), "http://localhost:5173"),
-  // "true" hanya jika API di belakang reverse proxy terpercaya yang menyetel
-  // X-Forwarded-For — jangan pernah true saat API reachable langsung.
   TRUST_PROXY: v.optional(v.picklist(["true", "false"]), "false"),
-  // Token akses untuk endpoint peta gudang public (read-only). Kosong =
-  // endpoint dinonaktifkan (401).
   PUBLIC_MAP_TOKEN: v.optional(v.string(), ""),
 });
 

@@ -4,7 +4,7 @@ import { db } from "../db/client";
 import { businessPartners, items, transactionItems, transactions } from "../db/schema";
 import { ApiError, assertUuid } from "../http";
 import { publishEvent } from "../redis";
-import { authGuard, requirePerm } from "../security";
+import { authGuard, requirePerm, checkExportRate, getClientIp } from "../security";
 import { logAudit } from "../audit";
 import { applyItemImport, IMPORT_MAX_BYTES, isUniqueViolation, parseItemWorkbook } from "../import-items";
 import { computeItemHistory } from "../item-history";
@@ -125,8 +125,12 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
   )
   .get(
     "/export",
-    async ({ user }) => {
+    async ({ user, request, server }) => {
       requirePerm(user, "items:export");
+      const ip = getClientIp(request, server, request.headers);
+      if (!(await checkExportRate(ip))) {
+        throw new ApiError(429, "Terlalu banyak permintaan export. Coba lagi dalam 1 menit.");
+      }
       const rows = await db
         .select({
           sku: items.sku,

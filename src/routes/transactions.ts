@@ -1,7 +1,7 @@
 import { Elysia, t } from "elysia";
 import { ApiError } from "../http";
 import { publishEvent } from "../redis";
-import { authGuard, requirePerm } from "../security";
+import { authGuard, requirePerm, checkExportRate, getClientIp } from "../security";
 import {
   createTransaction,
   exportTransactions,
@@ -73,8 +73,12 @@ export const transactionRoutes = new Elysia({ prefix: "/api/transactions" }).use
   )
   .get(
     "/export",
-    async ({ query, user }) => {
+    async ({ query, user, request, server }) => {
       requirePerm(user, "transactions:export");
+      const ip = getClientIp(request, server, request.headers);
+      if (!(await checkExportRate(ip))) {
+        throw new ApiError(429, "Terlalu banyak permintaan export. Coba lagi dalam 1 menit.");
+      }
       const type = query.type === "in" || query.type === "out" ? query.type : undefined;
       const search = query.search?.trim() || undefined;
       const partnerId = query.partnerId || undefined;

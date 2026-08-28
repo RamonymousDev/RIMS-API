@@ -46,6 +46,17 @@ sudo -u postgres psql -c "CREATE USER rims WITH PASSWORD 'ganti-password';"
 sudo -u postgres psql -c "CREATE DATABASE rims OWNER rims;"
 ```
 
+### Privilege extension pg_trgm
+
+API menjalankan `CREATE EXTENSION IF NOT EXISTS pg_trgm;` saat startup via `ensureExtensions()`.
+User DB `rims` butuh privilege `CREATEDB` atau akses superuser, atau extension harus dibuat manual terlebih dahulu:
+
+```bash
+sudo -u postgres psql -d rims -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+```
+
+Jika tidak, API gagal start dengan error permission denied.
+
 Migrasi (wajib dijalankan sekali saat setup dan setelah `git pull` yang mengubah schema):
 
 ```bash
@@ -61,11 +72,12 @@ bun run db:migrate
 
 - [ ] `timedatectl set-timezone` sesuai zona operasional (lihat catatan di atas)
 - [ ] HTTPS aktif; login menghasilkan cookie `__Host-` dengan `Secure`
-- [ ] `bun run db:migrate` tanpa error; data seed/uji tidak ada
+- [ ] `bun run db:migrate` tanpa error; extension `pg_trgm` sudah dibuat (lihat catatan privilege di atas)
 - [ ] Realtime: buka 2 tab → transaksi di satu tab tampil di tab lain
 - [ ] Backup `pg_dump` diuji restore minimal sekali
 - [ ] `.env` production: `COOKIE_DOMAIN` kosong, `WEB_ORIGIN` = https domain, password admin kuat
 - [ ] (opsional peta gudang) `PUBLIC_MAP_TOKEN` terisi & cocok dengan web v2; cek `GET /api/public/warehouse-map?token=…` → 200
+- [ ] Endpoint berat (`/api/stats`, `/api/items/export`, `/api/transactions/export`) dilindungi rate limit per-IP
 
 ## 3. Konfigurasi `.env`
 
@@ -75,10 +87,10 @@ Buka `/var/www/rims/api/.env`:
 | --- | --- | --- |
 | `NODE_ENV` | `production` | mengaktifkan cookie `__Host-` + bind `127.0.0.1` |
 | `PORT` | `3001` | jangan diubah tanpa mengubah Apache conf |
-| `DATABASE_URL` | `postgres://rims:<pass>@127.0.0.1:5432/rims` | |
-| `REDIS_URL` | `redis://127.0.0.1:6379` | default `Bun.redis` |
+| `DATABASE_URL` | `postgres://rims:<pass>@127.0.0.1:5432/rims` | **wajib** — tidak ada fallback default |
+| `REDIS_URL` | `redis://127.0.0.1:6379` | **wajib** — tanpa Redis API tidak bisa jalan (sesi, rate limit, pub/sub, cache) |
 | `ADMIN_USERNAME` | username admin | |
-| `ADMIN_PASSWORD` | password kuat (min. 12) | |
+| `ADMIN_PASSWORD` | password kuat (min. 12) | Hanya berlaku saat pembuatan pertama admin |
 | `COOKIE_DOMAIN` | **biarkan kosong** | ⚠️ lihat cookie `__Host-` di bawah |
 | `WEB_ORIGIN` | `https://rims.devmoon.net` | origin publik web |
 | `PUBLIC_MAP_TOKEN` | token acak kuat | endpoint peta gudang public — lihat di bawah; kosong = endpoint mati (401) |
@@ -107,7 +119,7 @@ GET /api/public/warehouse-map?token=<PUBLIC_MAP_TOKEN>
 - Endpoint ini **berfungsi tanpa cookie/URL session** — lewat Apache proxy `/api` yang sama, tidak perlu vhost terpisah.
 - Nilai `PUBLIC_MAP_TOKEN` di API harus **sama persis** dengan `PUBLIC_MAP_TOKEN` di `.env` web v2 (lihat `web_v2/DEPLOYMENT.md`).
 
-> ⚠️ Karena tidak ada mekanisme expiry/rotasi otomatis dan token lewat query string, jangan isi `PUBLIC_MAP_TOKEN` di URL bookmark/HTTPS yang log-able tanpa memang berniat mempublikasikan peta; ganti token berkala bila perlu.
+> ⚠️ Karena tidak ada mekanisme expiry/rotasi otomatis dan token lewat query string, jangan isi `PUBLIC_MAP_TOKEN` di URL bookmark/HTTPS yang log-able tanpa memang berniat mempublikasikan peta; ganti token berkala bila perlu. Token ini hanya keamanan przezlea — untuk display internal TV/PJ yang tidak terekspos publik.
 
 ## 4. Systemd service
 
