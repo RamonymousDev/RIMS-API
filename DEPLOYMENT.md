@@ -93,6 +93,7 @@ Buka `/var/www/rims/api/.env`:
 | `ADMIN_PASSWORD` | password kuat (min. 12) | Hanya berlaku saat pembuatan pertama admin |
 | `COOKIE_DOMAIN` | **biarkan kosong** | ⚠️ lihat cookie `__Host-` di bawah |
 | `WEB_ORIGIN` | `https://rims.devmoon.net` | origin publik web |
+| `TRUST_PROXY` | `true` | API di belakang Apache terpercaya yang menyetel `X-Forwarded-For` (lihat vhost di bawah) — wajib agar rate-limiter memakai IP asli klien, bukan 1 bucket untuk semua |
 | `PUBLIC_MAP_TOKEN` | token acak kuat | endpoint peta gudang public — lihat di bawah; kosong = endpoint mati (401) |
 
 ### Cookie `__Host-` (penting!)
@@ -170,7 +171,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3001/api/stats   # →
 journalctl -u rims-api -f                        # log API
 ```
 
-Login/SSE/export baru bisa diuji penuh setelah Apache vhost aktif (lihat `web/DEPLOYMENT.md`).
+Login/SSE/export baru bisa diuji penuh setelah Apache vhost aktif (lihat `web_v2/DEPLOYMENT.md`).
 
 ## 6. Backup
 
