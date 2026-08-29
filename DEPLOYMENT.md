@@ -1,0 +1,192 @@
+# Deploy RIMS API — production (Bun + Postgres + Redis, tanpa Docker)
+
+Panduan deploy API di server Linux dengan **Bun, Postgres, dan Redis** (tanpa Docker). Web (SvelteKit SSR / web v2) memakai service node — lihat `web_v2/DEPLOYMENT.md` (jalankan setelah API). Contoh domain memakai placeholder `https://rims.example.com` — ganti dengan domain produksi kamu.
+
+## Prerequisite
+
+| Komponen | Versi minimal | Catatan |
+| --- | --- | --- |
+| Bun | 1.3+ | runtime & package manager |
+| Postgres | 14+ | lokal di server |
+| Redis | 6+ | **wajib** — sesi, rate limit, pub/sub SSE, dan cache statistik semuanya memakai Redis (`Bun.redis`). Tanpa Redis API tidak bisa jalan. |
+| Apache | 2.4+ | `mod_proxy`, `mod_proxy_http`, `mod_headers`, `mod_ssl` |
+
+> ⚠️ **Zona waktu server penting.** "Hari ini", statistik, filter tanggal, dan validasi tanggal nota semuanya berbasis **zona waktu lokal server** (`src/dates.ts`). Jika server di UTC sedangkan pengguna di WIB, angka harian akan salah mulai jam 00.00–07.00 WIB. Pastikan:
+>
+> ```bash
+> sudo timedatectl set-timezone Asia/Jakarta   # atau zona operasional yang benar
+> timedatectl                                  # verifikasi
+> ```
+
+Buat user sistem khusus:
+
+```bash
+sudo useradd --system --create-home --shell /bin/bash rims
+```
+
+## 1. Letakkan kode & install
+
+```bash
+sudo mkdir -p /var/www/rims
+sudo chown -R rims:rims /var/www/rims
+
+sudo -u rims bash
+cd /var/www/rims
+git clone <repo-api> api     # repo api/ (pakai repo kamu)
+cd api
+bun install
+cp .env.example .env
+```
+
+## 2. Database
+
+```bash
+sudo -u postgres psql -c "CREATE USER rims WITH PASSWORD 'ganti-password';"
+sudo -u postgres psql -c "CREATE DATABASE rims OWNER rims;"
+```
+
+### Privilege extension pg_trgm
+
+API menjalankan `CREATE EXTENSION IF NOT EXISTS pg_trgm;` saat startup via `ensureExtensions()` (`src/db/client.ts`). User DB `rims` butuh privilege `CREATEDB` atau akses superuser, atau extension harus dibuat manual lebih dulu:
+
+```bash
+sudo -u postgres psql -d rims -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+```
+
+Jika tidak, API gagal start dengan error permission denied.
+
+Migrasi (wajib dijalankan sekali saat setup dan setelah `git pull` yang mengubah schema):
+
+```bash
+cd /var/www/rims/api
+bun run db:migrate
+```
+
+> Admin pertama dibuat **otomatis** saat API start (`ensureAdminUser()`) dari `ADMIN_USERNAME`/`ADMIN_PASSWORD`. Jika sudah ada, permission-nya selalu disinkronkan ke set penuh.
+>
+> ⚠️ **`ADMIN_PASSWORD` env HANYA berlaku untuk pembuatan pertama.** Mengubah `ADMIN_PASSWORD` di `.env` **tidak** mengubah hash admin yang sudah ada. Untuk reset password admin produksi: hapus baris user bootstrap dari DB lalu restart API (akan dibuat ulang dari env), atau reset lewat halaman Pengguna (`users:manage`).
+
+## 3. Konfigurasi `.env`
+
+Buka `/var/www/rims/api/.env`:
+
+| Variabel | Nilai produksi | Catatan |
+| --- | --- | --- |
+| `NODE_ENV` | `production` | mengaktifkan cookie `__Host-` + bind `127.0.0.1` (lihat `src/index.ts`) |
+| `PORT` | `3001` | jangan diubah tanpa mengubah Apache conf |
+| `DATABASE_URL` | `postgres://rims:<pass>@127.0.0.1:5432/rims` | **wajib** — tidak ada fallback default |
+| `REDIS_URL` | `redis://127.0.0.1:6379` | **wajib** — tanpa Redis API tidak bisa jalan (sesi, rate limit, pub/sub, cache) |
+| `ADMIN_USERNAME` | username admin | |
+| `ADMIN_PASSWORD` | password kuat (min. 12) | Hanya berlaku saat pembuatan pertama admin |
+| `COOKIE_DOMAIN` | **biarkan kosong** | ⚠️ lihat cookie `__Host-` di bawah |
+| `WEB_ORIGIN` | `https://rims.example.com` | origin publik web; membatasi CORS |
+| `TRUST_PROXY` | `true` | API di belakang Apache terpercaya yang menyetel `X-Forwarded-For` (lihat vhost di `web_v2/DEPLOYMENT.md`) — wajib agar rate-limiter memakai IP asli klien, bukan 1 bucket untuk semua |
+| `PUBLIC_MAP_TOKEN` | token acak kuat | endpoint peta gudang public (opsional) — lihat di bawah; kosong = endpoint mati (401) |
+
+### Cookie `__Host-` (penting!)
+
+Saat `NODE_ENV=production`, cookie sesi bernama **`__Host-rims_session`** (`src/auth.ts`). Prefix `__Host-` diwajibkan browser hanya jika **semua** ini terpenuhi:
+
+- `Secure` → koneksi harus **HTTPS** (Apache SSL)
+- `Path=/` → sudah otomatis
+- **tanpa atribut `Domain`** → karena itu `COOKIE_DOMAIN` harus **kosong**
+
+Jika `COOKIE_DOMAIN` diisi, browser menolak cookie dan login tidak pernah "melekat".
+
+> Tidak ada variabel `SESSION_SECRET` — sesi ditoken random (`randomBytes(32)`) dan disimpan di Redis; tidak memakai JWT/signature rahasia.
+
+### Endpoint peta gudang public (opsional)
+
+Web v2 punya halaman peta stok gudang (`/peta-stok`) yang menampilkan stok di TV/PJ **tanpa login**. Data diambil dari endpoint read-only yang dilindungi token sederhana:
+
+```
+GET /api/public/warehouse-map?token=<PUBLIC_MAP_TOKEN>
+```
+
+- Aktifkan dengan mengisi `PUBLIC_MAP_TOKEN` di `.env` (token acak kuat). Kosong → endpoint menolak dengan `401 {"error":"Peta gudang belum diaktifkan","code":"public:disabled"}`.
+- Setiap request wajib membawa `?token=` yang cocok; salah → `401 public:unauthorized`.
+- **Read-only & tersanitasi**: hanya mengekspos lokasi rak + stok + SKU/nama + unit + minStock. `itemId` internal ditutupi; **tidak ada** data transaksi, harga, atau pengguna.
+- Endpoint ini **berfungsi tanpa cookie/URL session** — lewat Apache proxy `/api` yang sama.
+- Nilai `PUBLIC_MAP_TOKEN` di API harus **sama persis** dengan `PUBLIC_MAP_TOKEN` di `.env` web v2 (lihat `web_v2/DEPLOYMENT.md`).
+
+## 4. Systemd service
+
+Buat `/etc/systemd/system/rims-api.service`:
+
+```ini
+[Unit]
+Description=RIMS API (Bun/Elysia)
+After=network.target postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=rims
+WorkingDirectory=/var/www/rims/api
+EnvironmentFile=/var/www/rims/api/.env
+ExecStart=/home/rims/.bun/bin/bun run start
+Restart=always
+RestartSec=3
+
+# Hardening — API tidak menulis file saat runtime
+ProtectSystem=strict
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> Sesuaikan `ExecStart` dengan lokasi bun kamu (`which bun`). Jika bun terpasang di `/usr/local/bin/bun`, pakai itu. `bun run start` = `bun src/index.ts`.
+>
+> `ProtectSystem=strict` membuat filesystem read-only saat runtime — aman karena API tidak menulis file. Jika suatu saat perlu menulis (mis. log ke disk), tambahkan `ReadWritePaths=` dengan path yang dimaksud.
+
+Aktifkan & jalankan:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now rims-api
+sudo systemctl status rims-api
+```
+
+API kini listen **`127.0.0.1:3001`** saja (tidak terekspos publik) — semua lalu lintas masuk lewat proxy Apache.
+
+## 5. Verifikasi API
+
+```bash
+curl -s http://127.0.0.1:3001/api/auth/me        # → 401 {"error":"Belum login"} (normal)
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3001/api/stats   # → 401
+journalctl -u rims-api -f                        # log API
+```
+
+Login/SSE/export baru bisa diuji penuh setelah Apache vhost aktif (lihat `web_v2/DEPLOYMENT.md`).
+
+## Checklist sebelum live
+
+- [ ] `timedatectl set-timezone` sesuai zona operasional (lihat catatan di atas)
+- [ ] HTTPS aktif; login menghasilkan cookie `__Host-` dengan `Secure`
+- [ ] `bun run db:migrate` tanpa error; extension `pg_trgm` sudah dibuat (lihat catatan privilege di atas)
+- [ ] Realtime: buka 2 tab → transaksi di satu tab tampil di tab lain
+- [ ] Backup `pg_dump` diuji restore minimal sekali
+- [ ] `.env` production: `COOKIE_DOMAIN` kosong, `WEB_ORIGIN` = https domain, password admin kuat
+- [ ] (opsional peta gudang) `PUBLIC_MAP_TOKEN` terisi & cocok dengan web v2; cek `GET /api/public/warehouse-map?token=…` → 200
+- [ ] Endpoint berat (`/api/stats`, `/api/items/export`, `/api/transactions/export`) dilindungi rate limit per-IP
+
+## 6. Backup
+
+Cron harian (`crontab -e`, user postgres atau sudo):
+
+```cron
+15 2 * * * pg_dump -U rims -h 127.0.0.1 rims | gzip > /var/backups/rims/rims-$(date +\%F).sql.gz && find /var/backups/rims -name '*.gz' -mtime +14 -delete
+```
+
+> Redis bersifat ephemeral: sesi/login-rate/cache boleh hilang — pengguna tinggal login ulang. Tidak perlu di-backup.
+
+## Update / deploy berikutnya
+
+```bash
+cd /var/www/rims/api
+git pull
+bun install
+bun run db:migrate          # hanya jika ada migrasi baru
+sudo systemctl restart rims-api
+```
