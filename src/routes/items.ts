@@ -326,6 +326,67 @@ export const itemRoutes = new Elysia({ prefix: "/api/items" }).use(authGuard())
     { params: t.Object({ id: t.String() }) },
   )
   .get(
+    "/by-sku/:sku/transactions",
+    async ({ params, user }) => {
+      requirePerm(user, "items:view");
+      const sku = params.sku.trim().toUpperCase();
+      const [item] = await db
+        .select({ id: items.id, name: items.name, sku: items.sku, stock: items.stock })
+        .from(items)
+        .where(eq(sql`upper(${items.sku})`, sku))
+        .limit(1);
+      if (!item) throw new ApiError(404, "Barang tidak ditemukan");
+
+      const rows = await db
+        .select({
+          transactionId: transactions.id,
+          number: transactions.number,
+          date: transactions.date,
+          type: transactions.type,
+          qty: transactionItems.qty,
+          voidedAt: transactions.voidedAt,
+          note: transactions.note,
+          createdAt: transactions.createdAt,
+          partnerCode: businessPartners.code,
+          partnerName: businessPartners.name,
+        })
+        .from(transactionItems)
+        .innerJoin(transactions, eq(transactionItems.transactionId, transactions.id))
+        .leftJoin(businessPartners, eq(transactions.partnerId, businessPartners.id))
+        .where(eq(transactionItems.itemId, item.id))
+        .orderBy(desc(transactions.date), desc(transactions.createdAt), desc(transactions.id));
+
+      const data = computeItemHistory(
+        rows.map((r) => ({
+          id: r.transactionId,
+          number: r.number,
+          date: r.date,
+          type: r.type,
+          qty: r.qty,
+          voidedAt: r.voidedAt,
+          note: r.note,
+          createdAt: r.createdAt,
+          partner: r.partnerCode ? { code: r.partnerCode, name: r.partnerName ?? "" } : null,
+        })),
+        item.stock,
+      );
+
+      return { item, data };
+    },
+    { params: t.Object({ sku: t.String() }) },
+  )
+  .get(
+    "/by-sku/:sku",
+    async ({ params, user }) => {
+      requirePerm(user, "items:view");
+      const sku = params.sku.trim().toUpperCase();
+      const [item] = await db.select().from(items).where(eq(sql`upper(${items.sku})`, sku)).limit(1);
+      if (!item) throw new ApiError(404, "Barang tidak ditemukan");
+      return { item };
+    },
+    { params: t.Object({ sku: t.String() }) },
+  )
+  .get(
     "/:id/transactions",
     async ({ params, user }) => {
       requirePerm(user, "items:view");
