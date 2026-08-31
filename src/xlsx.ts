@@ -65,8 +65,8 @@ export function applySheetHeaderStyle(ws: XLSX.WorkSheet, headerRow: number, col
       border: borderThin(),
     });
   }
-  ws["!rows"] = ws["!rows"] ?? [];
-  (ws["!rows"] as unknown as Array<Record<string, unknown>>)[headerRow] = { hpt: 22 };
+  (ws as unknown as Record<string, unknown>)["!rows"] = ((ws as unknown as Record<string, unknown>)["!rows"] as unknown[]) ?? [];
+  ((ws as unknown as Record<string, unknown>)["!rows"] as unknown as Array<Record<string, unknown>>)[headerRow] = { hpt: 22 };
 }
 
 export function applyTitleStyle(ws: XLSX.WorkSheet, row: number, colCount: number, bg = BRAND.navy) {
@@ -77,7 +77,8 @@ export function applyTitleStyle(ws: XLSX.WorkSheet, row: number, colCount: numbe
       alignment: { horizontal: "center", vertical: "center" },
     });
   }
-  (ws["!rows"] as unknown as Array<Record<string, unknown>>)[row] = { hpt: 26 };
+  (ws as unknown as Record<string, unknown>)["!rows"] = ((ws as unknown as Record<string, unknown>)["!rows"] as unknown[]) ?? [];
+  ((ws as unknown as Record<string, unknown>)["!rows"] as unknown as Array<Record<string, unknown>>)[row] = { hpt: 26 };
 }
 
 export function applySubtitleStyle(ws: XLSX.WorkSheet, row: number, colCount: number) {
@@ -166,11 +167,14 @@ export function styledStockBuffer(opts: {
   applyTitleStyle(ws, 0, colCount, BRAND.navy);
   applySubtitleStyle(ws, 1, colCount);
   applySheetHeaderStyle(ws, headerRow, colCount);
-  applyZebraAndBorders(ws, dataStart, dataEnd, colCount);
-  // kondisi column is index 7 (8th col)
-  for (let r = dataStart; r <= dataEnd; r++) {
-    const kondisi = String((ws[addr(7, r)] as unknown as { v?: unknown })?.v ?? "");
-    applyKondisiStyle(ws, r, 7, kondisi);
+  // only style data rows if any
+  if (dataEnd >= dataStart) {
+    applyZebraAndBorders(ws, dataStart, dataEnd, colCount);
+    // kondisi column is index 7 (8th col)
+    for (let r = dataStart; r <= dataEnd; r++) {
+      const kondisi = String((ws[addr(7, r)] as unknown as { v?: unknown })?.v ?? "");
+      applyKondisiStyle(ws, r, 7, kondisi);
+    }
   }
   // footer style
   for (let c = 0; c < colCount; c++) {
@@ -181,16 +185,22 @@ export function styledStockBuffer(opts: {
       border: { top: { style: "medium", color: { rgb: BRAND.navy } }, bottom: borderThin().bottom, left: borderThin().left, right: borderThin().right } as unknown as Record<string, unknown>,
     });
   }
-  // freeze panes below header, autofilter
+  // freeze panes below header, autofilter — use !views for SheetJS compliance, keep !freeze for compat
+  (ws as unknown as Record<string, unknown>)["!views"] = [{ state: "frozen", ySplit: 3, topLeftCell: "A4", activePane: "bottomLeft" }];
   (ws as unknown as Record<string, unknown>)["!freeze"] = { xSplit: 0, ySplit: 3, topLeftCell: "A4", activePane: "bottomLeft" };
   ws["!autofilter"] = { ref: `${addr(0, headerRow)}:${addr(colCount - 1, headerRow)}` };
 
   // row heights
-  ws["!rows"] = ws["!rows"] ?? [];
+  (ws as unknown as Record<string, unknown>)["!rows"] = ((ws as unknown as Record<string, unknown>)["!rows"] as unknown[]) ?? [];
   // already set header/title rows
 
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
-  return XLSX.write(wb, { type: "buffer", cellStyles: true }) as Buffer;
+  try {
+    return XLSX.write(wb, { type: "buffer", cellStyles: true }) as Buffer;
+  } catch {
+    // fallback plain without styles if styled write fails (CDN build without style support)
+    return XLSX.write(wb, { type: "buffer" }) as Buffer;
+  }
 }
 
 export function styledStockAttachment(opts: {

@@ -19,8 +19,13 @@ export const stokRoutes = new Elysia({ prefix: "/api/stok" }).use(authGuard())
     "/export",
     async ({ query, user, request, server }) => {
       requirePerm(user, "items:export");
-      const ip = getClientIp(request, server, request.headers);
-      if (!(await checkExportRate(ip))) {
+      let canExport = true;
+      try {
+        canExport = await checkExportRate(getClientIp(request, server, request.headers));
+      } catch {
+        canExport = true; // Redis down -> allow, don't 500
+      }
+      if (!canExport) {
         throw new ApiError(429, "Terlalu banyak permintaan export. Coba lagi dalam 1 menit.");
       }
       const search = query.search?.trim() ?? "";
